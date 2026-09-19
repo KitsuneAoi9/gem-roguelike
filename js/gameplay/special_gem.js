@@ -4,9 +4,14 @@
 // Reads/writes specialGemState (resources/specialGem/) but owns none
 // of it — same split as boon.js/shop.js/tiles.js. The one thing this
 // module does that those don't: it reads the live `grid` (gem types)
-// to classify match shapes and to run a Hypercube's board-wide wipe,
-// though it never mutates `grid` itself — main.js still owns clearing
-// cells to -1 and calling collapseAndFill().
+// to classify match shapes and to run a Hyperstar's swap-activated
+// effects. The normal-match path never mutates `grid` itself — main.js
+// still owns clearing cells to -1 and calling collapseAndFill(). The
+// Hyperstar+Laser combo IS a deliberate exception to the "read-only"
+// half of that rule: it writes into specialGemState.grid directly
+// (see triggerHyperstarLaserCombo()), since "convert these cells into
+// lasers" is itself part of that combo's effect, not a decision
+// main.js makes afterward.
 // ============================================================
 
 import { SIZE, BLOCKED } from './board.js';
@@ -81,12 +86,44 @@ function intersectionCell(cells) {
   return middleCell(cells); // shouldn't happen for a real L/T, but don't crash if it does
 }
 
+/** Every cell a Row Laser clears in addition to itself: its full row. */
+function laserRowBlastCells(row, col) {
+  const cells = [];
+  for (let c = 0; c < SIZE; c++) cells.push([row, c]);
+  return cells;
+}
+
+/** Every cell a Column Laser clears in addition to itself: its full column. */
+function laserColBlastCells(row, col) {
+  const cells = [];
+  for (let r = 0; r < SIZE; r++) cells.push([r, col]);
+  return cells;
+}
+
+/** Every cell a Star gem clears in addition to itself: row + column + both diagonals. Unchanged from before — still built out of the two laser blast shapes plus diagonals. */
+function starBlastCells(row, col) {
+  const cells = [...laserRowBlastCells(row, col), ...laserColBlastCells(row, col)];
+  for (let d = -SIZE; d <= SIZE; d++) {
+    if (d === 0) continue;
+    if (inBounds(row + d, col + d)) cells.push([row + d, col + d]);
+    if (inBounds(row + d, col - d)) cells.push([row + d, col - d]);
+  }
+  return cells;
+}
+
 /**
  * Decides whether a matched group should spawn a special gem, and
- * where. Mirrors Bejeweled: a straight-line group of exactly 4 spawns
- * a Flame; a straight-line group of 5+ spawns a Hypercube; any
- * non-straight group of 4+ (an L or T shape) spawns a Star. Plain
- * 3-matches spawn nothing.
+ * where.
+ *
+ * REWORKED THIS ROUND: a straight-line group of exactly 4 used to
+ * always spawn a Flame; now it spawns a directional Laser instead —
+ * Row if the run lies along a single row (horizontal), Column if it
+ * lies along a single column (vertical). A straight-line group of 5+
+ * still spawns a Hyperspace Star (renamed from Hypercube — same
+ * trigger condition, very different activation behavior, see
+ * main.js). A non-straight group of 4+ (an L or T shape) is
+ * unchanged: still spawns a Star. Plain 3-matches still spawn
+ * nothing.
  *
  * @param {{gemType: number, cells: [number, number][]}} group
  * @returns {{type: string, row: number, col: number} | null}
@@ -97,41 +134,34 @@ function classifyGroup(group) {
 
   const straight = isStraightLine(cells);
 
-  if (cells.length === 4 && straight) {
-    const [row, col] = middleCell(cells);
-    return { type: SPECIAL_GEM_TYPE.FLAME, row, col };
-  }
   if (straight) {
-    const [row, col] = middleCell(cells); // length >= 5 here
-    return { type: SPECIAL_GEM_TYPE.HYPERCUBE, row, col };
+    // A straight run's cells all share either the same row (a
+    // horizontal run) or the same column (a vertical run) — check
+    // which, so a 4-match spawns the RIGHT direction of laser.
+    const isHorizontalRun = cells.every(([r]) => r === cells[0][0]);
+    const [row, col] = middleCell(cells);
+
+    if (cells.length === 4) {
+      return {
+        type: isHorizontalRun ? SPECIAL_GEM_TYPE.LASER_ROW : SPECIAL_GEM_TYPE.LASER_COL,
+        row,
+        col,
+      };
+    }
+    // length >= 5 here, straight line either way — always a Hyperstar
+    // regardless of orientation, since it isn't a directional gem.
+    return { type: SPECIAL_GEM_TYPE.HYPERSTAR, row, col };
   }
+
+  // Non-straight (L/T shape) group of 4+ — completely unchanged.
   const [row, col] = intersectionCell(cells);
   return { type: SPECIAL_GEM_TYPE.STAR, row, col };
 }
 
-/** Every cell a Flame gem clears in addition to itself: its full row + column. */
-function flameBlastCells(row, col) {
-  const cells = [];
-  for (let c = 0; c < SIZE; c++) cells.push([row, c]);
-  for (let r = 0; r < SIZE; r++) cells.push([r, col]);
-  return cells;
-}
-
-/** Every cell a Star gem clears in addition to itself: row + column + both diagonals. */
-function starBlastCells(row, col) {
-  const cells = flameBlastCells(row, col);
-  for (let d = -SIZE; d <= SIZE; d++) {
-    if (d === 0) continue;
-    if (inBounds(row + d, col + d)) cells.push([row + d, col + d]);
-    if (inBounds(row + d, col - d)) cells.push([row + d, col - d]);
-  }
-  return cells;
-}
-
 /**
  * Resolves one round of matches: spawn decisions, chain-reaction
- * expansion, AND (new) a scoring breakdown — which cleared cells came
- * from a formed match (matchedGroups) vs. a chain-reaction blast
+ * expansion, and a scoring breakdown — which cleared cells came from
+ * a formed match (matchedGroups) vs. a chain-reaction blast
  * (incidentalCells) — so score.js can score them differently.
  *
  * @param {number[][]} grid
@@ -179,7 +209,12 @@ export function resolveSpecialGems(grid, matched) {
     const specialType = specialGemState.grid[r][c];
     if (!specialType) continue;
 
-    const blast = specialType === SPECIAL_GEM_TYPE.FLAME ? flameBlastCells(r, c)
+    // Dispatch on which special sits here. Hyperstar deliberately has
+    // no case — it's swap-activated only (see main.js's attemptSwap)
+    // and never blasts as part of a normal chain reaction, same as
+    // the old Hypercube behavior.
+    const blast = specialType === SPECIAL_GEM_TYPE.LASER_ROW ? laserRowBlastCells(r, c)
+      : specialType === SPECIAL_GEM_TYPE.LASER_COL ? laserColBlastCells(r, c)
       : specialType === SPECIAL_GEM_TYPE.STAR ? starBlastCells(r, c)
       : [];
 
@@ -211,18 +246,18 @@ export function resolveSpecialGems(grid, matched) {
 }
 
 /**
- * Applies a Hypercube's swap-activated ability: clears every gem on
- * the board matching `targetGemType`, plus the Hypercube's own cell.
- * Call right after a swap involving a Hypercube, instead of running
- * the normal match check on that swap.
+ * Hyperstar + normal (or Star) gem swap — the classic same-color
+ * wipe. Renamed from the old triggerHypercube(); behavior itself is
+ * UNCHANGED: clears every gem on the board matching `targetGemType`,
+ * plus the Hyperstar's own cell.
  *
  * @param {number[][]} grid
- * @param {number} hyperRow - row the Hypercube ended up at after the swap.
- * @param {number} hyperCol - column the Hypercube ended up at after the swap.
+ * @param {number} hyperRow - row the Hyperstar ended up at after the swap.
+ * @param {number} hyperCol - column the Hyperstar ended up at after the swap.
  * @param {number} targetGemType - gem type to wipe from the board.
  * @returns {[number, number][]} every cell cleared.
  */
-export function triggerHypercube(grid, hyperRow, hyperCol, targetGemType) {
+export function triggerHyperstarSingle(grid, hyperRow, hyperCol, targetGemType) {
   const cleared = [[hyperRow, hyperCol]];
   for (let r = 0; r < SIZE; r++) {
     for (let c = 0; c < SIZE; c++) {
@@ -230,6 +265,98 @@ export function triggerHypercube(grid, hyperRow, hyperCol, targetGemType) {
     }
   }
   return cleared;
+}
+
+/**
+ * NEW — Hyperstar + Laser swap: "convert and detonate," mirroring
+ * Bejeweled's Hypercube-plus-special interaction. Every board cell
+ * whose underlying color matches the swapped-with laser's color gets
+ * converted into a laser gem itself — orientation (row or column)
+ * rolled independently per cell, per the design ask ("random"). Every
+ * one of those freshly-converted lasers then immediately detonates.
+ *
+ * Mutates specialGemState.grid directly during the conversion step —
+ * this is the one documented exception to this module's usual
+ * "read grid, don't write it" split (see file header comment).
+ * main.js's clearSpecialGems() wipes all of it again moments later
+ * once these cells get cleared to -1, so nothing lingers on screen.
+ *
+ * @param {number[][]} grid
+ * @param {number} hyperRow - row the Hyperstar ended up at after the swap.
+ * @param {number} hyperCol - column the Hyperstar ended up at after the swap.
+ * @param {number} targetGemType - underlying color of the laser gem swapped with.
+ * @returns {[number, number][]} every cell cleared (Hyperstar's own cell + every converted laser's blast).
+ */
+export function triggerHyperstarLaserCombo(grid, hyperRow, hyperCol, targetGemType) {
+  const cleared = new Set([`${hyperRow},${hyperCol}`]);
+
+  // Step 1 — find every matching-color cell on the board and convert
+  // it into a laser. Collected into a list first (rather than
+  // detonating inline) so step 2 always detonates the FULL converted
+  // set, not a partial one affected by earlier detonations altering
+  // the board mid-loop.
+  const convertedLasers = [];
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      if (grid[r][c] !== targetGemType) continue;
+      const orientation = Math.random() < 0.5 ? SPECIAL_GEM_TYPE.LASER_ROW : SPECIAL_GEM_TYPE.LASER_COL;
+      specialGemState.grid[r][c] = orientation;
+      convertedLasers.push({ row: r, col: c, orientation });
+    }
+  }
+
+  // Step 2 — detonate every laser just created. Each one blasts its
+  // own row or column depending on the orientation it happened to
+  // roll, exactly like a normally-matched laser of that type would.
+  convertedLasers.forEach(({ row, col, orientation }) => {
+    cleared.add(`${row},${col}`);
+    const blast = orientation === SPECIAL_GEM_TYPE.LASER_ROW
+      ? laserRowBlastCells(row, col)
+      : laserColBlastCells(row, col);
+    blast.forEach(([br, bc]) => {
+      if (inBounds(br, bc) && grid[br][bc] != null) cleared.add(`${br},${bc}`);
+    });
+  });
+
+  return [...cleared].map(key => key.split(',').map(Number));
+}
+
+/**
+ * NEW — Hyperstar + Hyperstar swap: clears the entire board.
+ *
+ * @param {number[][]} grid
+ * @returns {[number, number][]} every currently-usable (non-BLOCKED) cell on the board.
+ */
+export function triggerHyperstarDouble(grid) {
+  const cleared = [];
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      if (grid[r][c] != null) cleared.push([r, c]);
+    }
+  }
+  return cleared;
+}
+
+/**
+ * NEW — Laser + Laser swap combo: clears the full row AND full
+ * column through the swap's DESTINATION cell (row, col) — regardless
+ * of which two orientations (row/row, row/col, col/col) were
+ * actually involved. Since a swap can only ever happen between
+ * orthogonally-adjacent cells, the OTHER laser's own cell is always
+ * automatically included in one of these two lines — no separate
+ * handling needed for it.
+ *
+ * @param {number[][]} grid
+ * @param {number} row - destination row (main.js passes r2/c2 here — see attemptSwap).
+ * @param {number} col - destination col.
+ * @returns {[number, number][]}
+ */
+export function triggerLaserCombo(grid, row, col) {
+  const cleared = new Set();
+  [...laserRowBlastCells(row, col), ...laserColBlastCells(row, col)].forEach(([r, c]) => {
+    if (inBounds(r, c) && grid[r][c] != null) cleared.add(`${r},${c}`);
+  });
+  return [...cleared].map(key => key.split(',').map(Number));
 }
 
 /**

@@ -84,6 +84,20 @@ export function applyBoonEffect(def) {
       progressionState.scoreTarget = calculateScoreTarget(progressionState.level);
       break;
 
+    case 'board_expand':
+    case 'board_shrink':
+    case 'board_expand_and_shrink':
+      // Deliberate no-op here — unlike every other boon kind, a
+      // board-shape change can't be applied synchronously: it needs the
+      // player to click a cell. applyBoonEffect() only ever mutates
+      // passive state (gemBaseState/boonEffectState/progressionState);
+      // the actual grid mutation happens later, via main.js's
+      // startTilePlacement()/handlePlacementClick(), once the player has
+      // picked where to place it. This is a documented exception to Rule
+      // 11's "single dispatcher mutates state" — record it as such in
+      // the handoff so nobody "fixes" this into a real case later.
+      break;
+
     default:
       // tile boons / other future types — nothing to apply yet
       break;

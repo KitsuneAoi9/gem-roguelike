@@ -28,15 +28,20 @@
 
 /* ============================================================
    SPECIAL GEMS
-   No dedicated art yet — a pulsing colored glow layered on top of
-   the gem's normal SVG is enough to read as "this one's special"
-   until real Flame/Star/Hypercube art exists.
+   No dedicated art for most of these — a pulsing colored glow
+   layered on top of the gem's normal SVG is enough to read as "this
+   one's special." Lasers and the Hyperstar get their own distinct
+   treatment below since orientation/identity matters more for them.
    ============================================================ */
 
 .gem--special {
   position: relative;
 }
 
+/* Default treatment: pulsing colored glow ring. Used by Star and
+   Hyperstar. Lasers override this completely below (see LASER BEAM
+   GEMS) — a gem only gets one ::after, so it's either the glow OR
+   the laser's arrow, never both. */
 .gem--special::after {
   content: '';
   position: absolute;
@@ -46,11 +51,89 @@
   animation: special-pulse 1.4s ease-in-out infinite;
 }
 
-.gem--flame::after     { box-shadow: 0 0 10px 3px rgba(224, 90, 44, 0.85); }
-.gem--star::after      { box-shadow: 0 0 10px 3px rgba(224, 179, 74, 0.85); }
-.gem--hypercube::after { box-shadow: 0 0 10px 3px rgba(150, 190, 255, 0.9); }
+.gem--star::after { box-shadow: 0 0 10px 3px rgba(224, 179, 74, 0.85); }
 
 @keyframes special-pulse {
   0%, 100% { opacity: 0.55; transform: scale(1); }
   50%      { opacity: 1;    transform: scale(1.08); }
+}
+
+/* ============================================================
+   LASER BEAM GEMS (row/column)
+   Directional arrows instead of the glow ring above — clearer at a
+   glance which axis a laser is about to clear than a plain colored
+   halo would be. Row lasers point left/right; column lasers point
+   up/down. This intentionally FULLY resets .gem--special::after's
+   properties rather than layering on top of them, since a circular
+   glow's border-radius/inset/box-shadow would otherwise bleed
+   through onto what's supposed to be a sharp triangle.
+   ============================================================ */
+
+.gem--laser-row::before,
+.gem--laser-row::after,
+.gem--laser-col::before,
+.gem--laser-col::after {
+  content: '';
+  position: absolute;
+  inset: auto;        /* cancel .gem--special::after's inset: -6px */
+  border-radius: 0;   /* cancel its border-radius: 50% */
+  box-shadow: none;   /* no glow — the arrow shape carries the "special" read instead */
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  animation: laser-pulse 1.4s ease-in-out infinite;
+}
+
+/* Row laser (spawned from a HORIZONTAL match) — arrows on the left
+   and right edges, pointing outward along the row it clears. */
+.gem--laser-row::before,
+.gem--laser-row::after {
+  top: 50%;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  transform: translateY(-50%);
+}
+.gem--laser-row::before { left: -11px;  border-right: 9px solid var(--gold); } /* points left */
+.gem--laser-row::after  { right: -11px; border-left: 9px solid var(--gold); }  /* points right */
+
+/* Column laser (spawned from a VERTICAL match) — arrows on the top
+   and bottom edges, pointing outward along the column it clears. */
+.gem--laser-col::before,
+.gem--laser-col::after {
+  left: 50%;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  transform: translateX(-50%);
+}
+.gem--laser-col::before { top: -11px;    border-bottom: 9px solid var(--gold); } /* points up */
+.gem--laser-col::after  { bottom: -11px; border-top: 9px solid var(--gold); }    /* points down */
+
+@keyframes laser-pulse {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+
+/* ============================================================
+   HYPERSPACE STAR
+   A solid yellow star silhouette (CSS clip-path) REPLACES the
+   underlying gem's normal SVG entirely, so it reads instantly as
+   "this one's different" the way Bejeweled's Hypercube does — rather
+   than looking like, say, a yellow-glowing Topaz.
+   ============================================================ */
+
+.gem--hyperstar {
+  background-image: none !important; /* suppress the underlying gem's own SVG */
+  background-color: #ffd400;
+  clip-path: polygon(
+    50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%,
+    50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%
+  );
+}
+
+/* Keeps the round pulsing glow from the base .gem--special::after
+   rule (border-radius/inset/animation all still apply — only the
+   color is overridden here), which reads fine sitting behind a star
+   shape, unlike behind the laser's sharp triangle arrows above. */
+.gem--hyperstar::after {
+  box-shadow: 0 0 12px 4px rgba(255, 221, 64, 0.95);
 }

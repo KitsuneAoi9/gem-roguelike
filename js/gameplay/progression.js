@@ -7,7 +7,7 @@
 // board. Formulas below are placeholders, same spirit as score.js.
 // ============================================================
 
-import { DEFAULT_MOVES, BOARD_SIZE } from '../resources/constant/constants.js';
+import { DEFAULT_MOVES, INITIAL_BOARD_SIZE } from '../resources/constant/constants.js';
 import { progressionState } from '../resources/progression/progression.js';
 import { boonEffectState } from '../resources/boon/boon_effect_state.js';
 
@@ -41,13 +41,13 @@ export function calculateMovesAllowed(level) {
 /**
  * Board size for a given level. Placeholder: always the constant
  * board size. Not wired into board.js yet — that file still reads
- * BOARD_SIZE directly.
+ * INITIAL_BOARD_SIZE directly.
  *
  * @param {number} level - 1-based level number.
  * @returns {number} board size (width == height) for that level.
  */
 export function calculateBoardSize(level) {
-  return BOARD_SIZE;
+  return INITIAL_BOARD_SIZE;
 }
 
 /**

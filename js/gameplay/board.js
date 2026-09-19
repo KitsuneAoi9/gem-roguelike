@@ -5,12 +5,23 @@
 // what a gem looks like or how it's drawn — that's render.js's job.
 // Keeping this split means swapping render.js for a Phaser version
 // later won't require touching any logic in here.
+//
+// SIZE CHANGE THIS ROUND: SIZE is now MAX_BOARD_SIZE (20), not the
+// old fixed BOARD_SIZE (8). The grid is allocated at its maximum
+// possible footprint from the start of every run — a fresh run just
+// has almost everything BLOCKED except a centered starting square
+// (see tiles.js's resetTiles()). Expand-board boons unblock more of
+// this pre-allocated space; nothing in this file changes size at
+// runtime, which keeps findMatches/collapseAndFill/hasPossibleMove
+// exactly as simple as before — they already treat BLOCKED cells as
+// "skip this," so a mostly-BLOCKED 20x20 grid behaves for them
+// exactly like a smaller board would.
 // ============================================================
 
-import { BOARD_SIZE, GEM_TYPES_COUNT } from '../resources/constant/constants.js';
+import { MAX_BOARD_SIZE, GEM_TYPES_COUNT } from '../resources/constant/constants.js';
 
 // Re-exported under shorter names since they're used constantly below.
-export const SIZE = BOARD_SIZE;
+export const SIZE = MAX_BOARD_SIZE;
 export const GEM_TYPES_TOTAL = GEM_TYPES_COUNT;
 
 // Sentinel for a permanently deconstructed cell — distinct from the
@@ -37,16 +48,34 @@ export function rand(numberVal) {
  * Builds a SIZE x SIZE grid with no pre-existing 3-in-a-row matches,
  * so the player doesn't start with a "free" match already on the board.
  *
- * @returns {number[][]} a new SIZE x SIZE grid of gem type numbers.
+ * @param {(row: number, col: number) => boolean} [isBlocked] - called
+ *   for every cell; if it returns true, that cell is set to BLOCKED
+ *   instead of getting a rolled gem type. Defaults to "nothing is
+ *   blocked", which reproduces the old always-fully-open behavior.
+ *   Callers pass in tileState.blockedCells (via tiles.js) so this
+ *   function never has to know what a "tile" or a "boon" is — it
+ *   just honors whatever predicate it's handed.
+ * @returns {number[][]} a new SIZE x SIZE grid of gem type numbers
+ *   (and BLOCKED wherever isBlocked said so).
  */
-export function createGridNoMatches() {
+export function createGridNoMatches(isBlocked = () => false) {
   const grid = [];
   for (let row = 0; row < SIZE; row++) {
     const rows = [];
     for (let col = 0; col < SIZE; col++) {
+      // A blocked cell never gets a gem — skip straight past the
+      // re-roll loop below, since BLOCKED can never "match" anyway.
+      if (isBlocked(row, col)) {
+        rows.push(BLOCKED);
+        continue;
+      }
+
       let type;
       // Re-roll if this placement would immediately complete a
-      // horizontal or vertical run of 3.
+      // horizontal or vertical run of 3. Comparing against a BLOCKED
+      // neighbor (null) against a numeric type is always false, so
+      // this naturally treats "neighbor is blocked" the same as
+      // "neighbor doesn't match" — no special-casing needed here.
       do {
         type = rand(GEM_TYPES_TOTAL);
       } while (
@@ -128,6 +157,11 @@ export function hasAnyMatch(matched) {
  * Brute-force check: try every adjacent swap on a scratch copy of the
  * grid and see if any of them produces a match. Used to detect a
  * stuck board so we know when to reshuffle.
+ *
+ * NOTE: now scans the full SIZE x SIZE (20x20) allocated grid rather
+ * than a fixed 8x8 — still cheap (a few thousand cell/clone checks
+ * worst case) and correct as-is, since a BLOCKED cell is skipped
+ * immediately below and never considered a swap partner.
  *
  * @param {number[][]} g - the grid to check.
  * @returns {boolean} true if at least one legal swap would create a match.
@@ -215,4 +249,36 @@ export function collapseAndFill(g, parallelGrids = []) {
       segmentBottom = r - 1;
     }
   }
+}
+
+/**
+ * Finds the smallest rectangle that contains every currently-usable
+ * (non-BLOCKED) cell in the grid. This is what render.js uses to
+ * decide what to actually draw — most of the allocated SIZE x SIZE
+ * grid is BLOCKED padding the player should never see, so rendering
+ * always crops to this rectangle (plus, during board-expansion
+ * placement, whatever ghost cells are being offered — see
+ * tiles.js's getExpandableCells() and render.js's ghostCells option).
+ *
+ * Pure grid math, no DOM — stays in board.js per Rule 2.
+ *
+ * @param {number[][]} grid - the grid to scan.
+ * @returns {{minRow: number, maxRow: number, minCol: number, maxCol: number}}
+ *   bounds of the usable area. Falls back to a single cell at (0,0)
+ *   if somehow nothing is usable, so callers never have to guard
+ *   against Infinity leaking out of this function.
+ */
+export function getActiveBounds(grid) {
+  let minRow = Infinity, maxRow = -Infinity, minCol = Infinity, maxCol = -Infinity;
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      if (grid[r][c] === BLOCKED) continue;
+      if (r < minRow) minRow = r;
+      if (r > maxRow) maxRow = r;
+      if (c < minCol) minCol = c;
+      if (c > maxCol) maxCol = c;
+    }
+  }
+  if (minRow === Infinity) return { minRow: 0, maxRow: 0, minCol: 0, maxCol: 0 };
+  return { minRow, maxRow, minCol, maxCol };
 }

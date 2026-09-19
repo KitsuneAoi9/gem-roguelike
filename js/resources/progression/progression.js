@@ -11,11 +11,11 @@
 // (gameplay/progression.js) overwrites them as soon as a run starts.
 // ============================================================
 
-import { DEFAULT_MOVES, BOARD_SIZE } from '../constant/constants.js';
+import { DEFAULT_MOVES, INITIAL_BOARD_SIZE } from '../constant/constants.js';
 
 export const progressionState = {
   level: 1,
   scoreTarget: 0,
   movesAllowed: DEFAULT_MOVES,
-  boardSize: BOARD_SIZE,
+  boardSize: INITIAL_BOARD_SIZE,
 };

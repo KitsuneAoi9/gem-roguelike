@@ -8,7 +8,7 @@
 // ============================================================
 
 import {
-  SIZE, createGridNoMatches, findMatches, hasAnyMatch,
+  SIZE, findMatches, hasAnyMatch,
   hasPossibleMove, swap, collapseAndFill, BLOCKED
 } from './board.js';
 
@@ -21,28 +21,35 @@ import { calculateCascadeStepScore } from './score.js';
 
 import {
   PREVENT_DEADLOCK, DEFAULT_SCORE, SWAP_ANIM_MS, MATCH_CLEAR_DELAY_MS,
-  CASCADE_CHECK_DELAY_MS, LEVEL_UP_BONUS_MOVES, ENABLE_MOVES_LIMIT
+  CASCADE_CHECK_DELAY_MS, LEVEL_UP_BONUS_MOVES, ENABLE_MOVES_LIMIT, SCORE_POPUP_MS
 } from '../resources/constant/constants.js';
 
 import {
   GAME_NAME, GAME_TAGLINE, BUTTONS, DIALOG_TITLES, MESSAGES
 } from '../resources/constant/text.js';
 
+import {
+  expandBoard, shrinkBoard, resetTiles,
+  getExpandableCells, rebuildGridRespectingBlocked,
+} from './tiles.js';
+
 import { progressionState } from '../resources/progression/progression.js';
 import { resetProgression, advanceLevel } from './progression.js';
 import { resetBoons, generateBoonOffer, pickBoon } from './boon.js';
 import { applyBoonEffect, resetBoonEffects } from './boon_effects.js';
 import { TILE_SHAPES } from '../resources/constant/constants.js';
-import { tileState } from '../resources/tile/tile_state.js';
-import { constructTile, deconstructTile, resetTiles } from './tiles.js';
 
 import { SPECIAL_GEM_TYPE } from '../resources/special%20gem/special_gem.js';
 import { specialGemState } from '../resources/special%20gem/special_gem_state.js';
-import { resolveSpecialGems, applySpawns, clearSpecialGems, triggerHypercube, resetSpecialGems } from './special_gems.js';
+import {
+  resolveSpecialGems, applySpawns, clearSpecialGems, resetSpecialGems,
+  triggerHyperstarSingle, triggerHyperstarLaserCombo, triggerHyperstarDouble, triggerLaserCombo,
+} from './special_gem.js';
 
 // --- DOM references, grabbed once ---
 const boardEl         = document.getElementById('board');
 const scoreEl         = document.getElementById('score');
+const scorePopupEl    = document.getElementById('score-popup');
 const movesEl         = document.getElementById('moves');
 const targetEl        = document.getElementById('target');
 const messageEl       = document.getElementById('message');
@@ -66,22 +73,27 @@ const boonDialogEl    = document.getElementById('boon-dialog');
 const boonTitleEl     = document.getElementById('boon-title');
 const boonChoicesEl   = document.getElementById('boon-choices');
 
-const constructBtn       = document.getElementById('construct-btn');
-const deconstructBtn     = document.getElementById('deconstruct-btn');
-const shapePickerEl      = document.getElementById('shape-picker');
-const shapeButtons       = document.querySelectorAll('.shape-btn');
-const cancelPlacementBtn = document.getElementById('cancel-placement-btn');
-
 // --- mutable game state ---
 let grid;
 let score;
 let moves;
-let selected; // [r, c] of the currently selected cell, or null
+let selected; // [row, col] of the currently selected cell, or null
 let placementMode; // 'construct' | 'deconstruct' | null — which action is armed
 let placementShape; // key into SLOT_SHAPES, or null until the player picks one
+// Holds the remaining placement phases for the boon currently being
+// placed (one phase for a plain expand or shrink boon; two — expand
+// then shrink, per the design doc's "addition first, then removal" —
+// for a combined risky boon), plus what to call once every phase for
+// this boon is done.
+let tilePlacementQueue = [];
+let tilePlacementFinalContinuation = null;
 let busy; // true while an animation/cascade is resolving — blocks input
 let comboCount; // how many cascade steps deep we are within one swap; resets each new swap
 
+// NEW — handle for the score popup's pending "fade back out" timer,
+// so a second popup arriving while the first is still showing can
+// cancel and restart the clock instead of getting cut off early.
+let scorePopupHideTimeout = null;
 // Set by showLevelUpDialog(); holds the "resume the cascade" callback
 // that the boon dialog invokes once the player has picked a boon.
 let pendingContinuation = null;
@@ -127,40 +139,6 @@ function signed(amount) {
 }
 
 /**
- * Adds `gained` to the score, updates the display, and advances the
- * level (possibly more than once) if the new score clears the current
- * target. Shared by the normal match flow and the Hypercube
- * swap-activation flow so level-up handling can't drift out of sync
- * between the two.
- *
- * @param {number} gained - score to add.
- * @param {string} comboMessage - message to show if this DIDN'T level up.
- * @returns {boolean} true if at least one level was cleared.
- */
-function applyScoreGain(gained, comboMessage) {
-  score += gained;
-  scoreEl.textContent = score;
-
-  let leveledUp = false;
-  while (score >= progressionState.scoreTarget) {
-    advanceLevel();
-    moves += LEVEL_UP_BONUS_MOVES;
-    leveledUp = true;
-  }
-
-  if (leveledUp) {
-    levelEl.textContent = progressionState.level;
-    targetEl.textContent = progressionState.scoreTarget;
-    movesEl.textContent = moves;
-    messageEl.textContent = '';
-  } else {
-    messageEl.textContent = comboMessage;
-  }
-
-  return leveledUp;
-}
-
-/**
  * Resets all game state to a fresh start and renders the initial board.
  * Called whenever a run actually begins — from the "Start Game" button
  * and from the in-game "start over" button. Does NOT touch the start
@@ -178,12 +156,26 @@ function init() {
   resetTiles();
   resetSpecialGems();
 
-  grid = createGridNoMatches();
+  // resetTiles() (just above, already called) seeds tileState.blockedCells
+  // with the starting blocked ring; pre-allocate a fully-blocked grid of
+  // the right size, then let rebuildGridRespectingBlocked() fill in every
+  // cell that ledger says should be usable. Two functions, one already
+  // tested by the reshuffle path below, instead of duplicating the
+  // "regen + reapply blocked" logic a second time here.
+  grid = Array.from({ length: SIZE }, () => Array(SIZE).fill(BLOCKED));
+  rebuildGridRespectingBlocked(grid);
   score = DEFAULT_SCORE;
   moves = progressionState.movesAllowed;
   selected = null;
   placementMode = null;
   placementShape = null;
+  // Holds the remaining placement phases for the boon currently being
+  // placed (one phase for a plain expand or shrink boon; two — expand
+  // then shrink, per the design doc's "addition first, then removal" —
+  // for a combined risky boon), plus what to call once every phase for
+  // this boon is done.
+  tilePlacementQueue = [];
+  tilePlacementFinalContinuation = null;
   busy = false;
   comboCount = 0;
   pendingContinuation = null;
@@ -197,9 +189,80 @@ function init() {
   loseDialogEl.classList.add('hidden');
   levelUpDialogEl.classList.add('hidden');
   boonDialogEl.classList.add('hidden');
-  shapePickerEl.classList.add('hidden');
 
   renderBoard(boardEl, grid, onCellClick);
+}
+
+/**
+ * Floats score-change text above the board for SCORE_POPUP_MS, then
+ * fades it back out. This REPLACES the old behavior of writing score
+ * deltas into the #message line below the board (see handoff) —
+ * messageEl is now reserved for status text only (prompts, invalid
+ * swap, reshuffling, placement instructions).
+ *
+ * Calling this again while a popup is already showing just updates
+ * the text and restarts the timer, rather than stacking a second
+ * popup or letting the first one's timer cut the new text short —
+ * useful during a fast multi-step cascade.
+ *
+ * @param {string} text
+ * @returns {void}
+ */
+function showScorePopup(text) {
+  scorePopupEl.textContent = text;
+  scorePopupEl.classList.add('visible');
+
+  // Cancel any previous pending fade-out — otherwise an earlier call's
+  // timer could fire mid-cascade and hide text a later call just set.
+  if (scorePopupHideTimeout) clearTimeout(scorePopupHideTimeout);
+  scorePopupHideTimeout = setTimeout(() => {
+    scorePopupEl.classList.remove('visible');
+    scorePopupHideTimeout = null;
+  }, SCORE_POPUP_MS);
+}
+
+/**
+ * Adds `gained` to the score, updates the display, and advances the
+ * level (possibly more than once) if the new score clears the current
+ * target. Shared by the normal match flow AND all four swap-activated
+ * special-gem combos below, so level-up handling can't drift out of
+ * sync between any of them.
+ *
+ * @param {number} gained - score to add.
+ * @param {string} popupText - text to float above the board if this
+ *   gain DIDN'T level up. (A level-up shows its own dialog instead,
+ *   so there's no point floating a popup that would just get covered.)
+ * @returns {boolean} true if at least one level was cleared.
+ */
+function applyScoreGain(gained, popupText) {
+  score += gained;
+  scoreEl.textContent = score;
+
+  let leveledUp = false;
+  while (score >= progressionState.scoreTarget) {
+    advanceLevel();
+    // Bonus moves on level-up only mean anything if moves are being
+    // tracked at all — skip the grant when the mechanic is off.
+    if (ENABLE_MOVES_LIMIT) {
+      moves += LEVEL_UP_BONUS_MOVES;
+    }
+    leveledUp = true;
+  }
+
+  if (leveledUp) {
+    levelEl.textContent = progressionState.level;
+    targetEl.textContent = progressionState.scoreTarget;
+    movesEl.textContent = moves;
+    // The level-up dialog is about to cover the screen — blank the
+    // status line so it doesn't show a stale prompt underneath it.
+    messageEl.textContent = '';
+  } else {
+    // NEW — score deltas float above the board instead of appearing
+    // in the #message line.
+    showScorePopup(popupText);
+  }
+
+  return leveledUp;
 }
 
 /**
@@ -272,87 +335,248 @@ function onCellClick(r, c) {
 }
 
 /**
- * Arms Construct or Deconstruct mode and opens the shape picker. Any
- * board click after this — once a shape is chosen — is interpreted
- * as a placement attempt instead of a normal select/swap.
- *
- * @param {'construct' | 'deconstruct'} mode
- * @returns {void}
- */
-function enterPlacementMode(mode) {
-  if (busy) return;
-  placementMode = mode;
-  placementShape = null;
-  shapePickerEl.classList.remove('hidden');
-  messageEl.textContent = 'choose a shape';
-}
-
-/**
- * Backs out of Construct/Deconstruct mode without placing anything.
- *
- * @returns {void}
- */
-function cancelPlacement() {
-  placementMode = null;
-  placementShape = null;
-  shapePickerEl.classList.add('hidden');
-  messageEl.textContent = MESSAGES.SELECT_PROMPT;
-}
-
-/**
- * Records which shape the player picked and prompts for a board
- * click to anchor it.
- *
- * @param {string} shapeKey - key into SLOT_SHAPES.
- * @returns {void}
- */
-function chooseShape(shapeKey) {
-  placementShape = shapeKey;
-  shapePickerEl.classList.add('hidden');
-  messageEl.textContent = placementMode === 'construct'
-      ? `click a cell for the top-left of your ${TILE_SHAPES[shapeKey].label} tile`
-      : `click a cell for the top-left of the ${TILE_SHAPES[shapeKey].label} area to remove`;
-}
-
-/**
- * Handles a board click while Construct/Deconstruct mode is armed and
- * a shape has been chosen: attempts the placement, gives feedback on
- * failure (invalid cells — stays in placement mode so the player can
- * try another spot), and re-renders on success.
+ * Handles a board click while a boon-driven expand/shrink placement
+ * is active. Unlike the old button-driven version, there's no
+ * separate "shape chosen yet?" gate — a boon's shape is already
+ * locked in the moment placement starts (see startTilePlacement()) —
+ * and there's no cancel: the design calls this mandatory, since it
+ * only ever runs after a cascade has fully settled.
  *
  * @param {number} anchorRow
  * @param {number} anchorCol
  * @returns {void}
  */
 function handlePlacementClick(anchorRow, anchorCol) {
-  if (!placementShape) return; // shape not chosen yet — ignore board clicks
-
-  if (placementMode === 'construct') {
-    const tile = constructTile(placementShape, anchorRow, anchorCol, grid);
-    if (!tile) {
-      messageEl.textContent = "can't place there — try another cell";
+  if (placementMode === 'expand') {
+    const placed = expandBoard(placementShape, anchorRow, anchorCol, grid);
+    if (!placed) {
+      // Invalid click — per the design doc, tell them and let them
+      // try again; stay in placement mode, don't re-render (the
+      // ghost-cell highlighting is still accurate, nothing changed).
+      messageEl.textContent = MESSAGES.EXPAND_INVALID;
       return;
     }
-    messageEl.textContent = `${TILE_SHAPES[placementShape].label} tile constructed`;
-  } else {
-    const removed = deconstructTile(placementShape, anchorRow, anchorCol, grid);
+  } else if (placementMode === 'shrink') {
+    const removed = shrinkBoard(placementShape, anchorRow, anchorCol, grid);
     if (!removed) {
-      messageEl.textContent = "can't remove there — try another cell";
+      messageEl.textContent = MESSAGES.SHRINK_INVALID;
       return;
     }
-    messageEl.textContent = `${TILE_SHAPES[placementShape].label} area removed`;
+    // A cell that no longer exists can't keep hosting a special gem —
+    // clear the overlay so nothing lingers "under" a blocked cell.
+    // (Per the design doc: deconstructing a special-gem cell just
+    // removes the gem, no blast triggers.)
+    clearSpecialGems(removed);
+  } else {
+    return; // shouldn't happen — placementMode is only ever 'expand' or 'shrink' now
   }
 
-  placementMode = null;
-  placementShape = null;
-  renderBoard(boardEl, grid, onCellClick);
+  // This phase is done — advance to the next one (if this was a
+  // combined expand-then-shrink boon) or finish up.
+  advanceTilePlacement();
+}
+
+/**
+ * Entry point from the boon dialog for a boon whose effect is a
+ * board-shape change. Builds the ordered list of placement phases
+ * this specific boon needs — one phase for a plain expand or shrink
+ * boon, two (expand, then shrink) for a combined risky boon, per the
+ * design doc's "addition first, then removal" — and starts the first
+ * one. `onContinue` (the cascade-resuming callback showBoonDialog()
+ * was already holding) is stashed rather than called immediately;
+ * it only fires once every phase is placed AND the post-placement
+ * reshuffle has run.
+ *
+ * @param {object} def - the picked BOON_POOL entry. Expected shapes:
+ *   - { kind: 'board_expand', shape: 'THREE_BY_ONE' }
+ *   - { kind: 'board_shrink', shape: 'ONE_BY_ONE' }
+ *   - { kind: 'board_expand_and_shrink', expandShape: '...', shrinkShape: '...' }
+ * @param {() => void} onContinue - resumes the cascade once fully done.
+ * @returns {void}
+ */
+function startTilePlacement(def, onContinue) {
+  const { effect } = def;
+  tilePlacementQueue = [];
+
+  if (effect.kind === 'board_expand' || effect.kind === 'board_expand_and_shrink') {
+    tilePlacementQueue.push({ action: 'expand', shape: effect.expandShape ?? effect.shape });
+  }
+  if (effect.kind === 'board_shrink' || effect.kind === 'board_expand_and_shrink') {
+    tilePlacementQueue.push({ action: 'shrink', shape: effect.shrinkShape ?? effect.shape });
+  }
+
+  tilePlacementFinalContinuation = onContinue;
+  advanceTilePlacement();
+}
+
+/**
+ * Moves to the next queued placement phase. Once the queue is empty —
+ * every phase of this boon has been placed — reshuffles the board
+ * (every non-blocked cell gets a fresh gem type; every special gem
+ * stays exactly where it is, since rebuildGridRespectingBlocked()
+ * only touches the base grid, never specialGemState) and hands
+ * control back to whatever was waiting on the whole boon to finish.
+ * No score is awarded here — this is purely "the board just changed
+ * shape, refresh its contents," same spirit as the deadlock reshuffle.
+ *
+ * @returns {void}
+ */
+function advanceTilePlacement() {
+  if (tilePlacementQueue.length === 0) {
+    rebuildGridRespectingBlocked(grid);
+    renderBoard(boardEl, grid, onCellClick);
+
+    const finish = tilePlacementFinalContinuation;
+    tilePlacementFinalContinuation = null;
+    placementMode = null;
+    placementShape = null;
+    messageEl.textContent = MESSAGES.SELECT_PROMPT;
+    if (finish) finish();
+    return;
+  }
+
+  const phase = tilePlacementQueue.shift();
+  placementMode = phase.action;   // 'expand' | 'shrink'
+  placementShape = phase.shape;
+
+  if (placementMode === 'expand') {
+    // Interpolates the shape's label, so this stays a template
+    // literal here rather than moving into text.js (Rule 7).
+    messageEl.textContent = `click a highlighted cell to grow your board with a ${TILE_SHAPES[placementShape].label} tile`;
+    // Only ghost cells are clickable-looking during an expand — every
+    // other BLOCKED cell stays plain grey, same as always.
+    renderBoard(boardEl, grid, onCellClick, { ghostCells: getExpandableCells(grid) });
+  } else {
+    messageEl.textContent = `click the top-left of a ${TILE_SHAPES[placementShape].label} area to remove from your board`;
+    renderBoard(boardEl, grid, onCellClick);
+  }
+}
+
+/**
+ * Shared tail-end for every swap-ACTIVATED special-gem combo
+ * (Hyperstar solo, Hyperstar+Laser, Hyperstar+Hyperstar, Laser+
+ * Laser). All four skip findMatches() entirely — they're triggered
+ * by WHAT was swapped, not by any pattern the swap happened to form —
+ * but still need the same bookkeeping afterward: spend a move, reset
+ * the combo counter (this is the start of a brand-new chain, not a
+ * continuation of one), score it, play the pop animation, then either
+ * detour into the level-up dialog or resume the cascade.
+ *
+ * @param {[number, number][]} clearedCells
+ * @param {number} gained
+ * @param {string} popupText
+ * @returns {void}
+ */
+function finishSwapActivatedCombo(clearedCells, gained, popupText) {
+  if (ENABLE_MOVES_LIMIT) {
+    moves--;
+    movesEl.textContent = moves;
+  }
+  comboCount = 0;
+
+  const leveledUp = applyScoreGain(gained, popupText);
+  markMatchedGems(boardEl, toBooleanGrid(clearedCells));
+
+  if (leveledUp) {
+    showLevelUpDialog(() => continueCascadeAfterMatch(clearedCells));
+  } else {
+    continueCascadeAfterMatch(clearedCells);
+  }
+}
+
+/**
+ * Hyperstar + a normal (or Star) gem — classic same-color wipe.
+ * Scored as ONE oversized matched group (all cleared cells share the
+ * same color, so a "group" is a meaningful unit here) — same
+ * treatment the old Hypercube got, unchanged.
+ *
+ * @param {number} hyperRow
+ * @param {number} hyperCol
+ * @param {number} targetGemType
+ * @returns {void}
+ */
+function handleHyperstarSingle(hyperRow, hyperCol, targetGemType) {
+  const clearedCells = triggerHyperstarSingle(grid, hyperRow, hyperCol, targetGemType);
+  const gained = calculateCascadeStepScore({
+    matchedGroups: [{ gemType: targetGemType, length: clearedCells.length }],
+    incidentalCells: [],
+    comboCount: 1,
+  });
+  finishSwapActivatedCombo(clearedCells, gained, `hyperstar! ${signed(gained)}`);
+}
+
+/**
+ * Hyperstar + Laser — convert-and-detonate combo. Cleared cells span
+ * whatever colors happened to be under each detonated laser's blast,
+ * so (unlike the single-color wipe above) this is scored as a set of
+ * INCIDENTAL cells — one flat gem value each — rather than one
+ * artificial same-color group.
+ *
+ * @param {number} hyperRow
+ * @param {number} hyperCol
+ * @param {number} laserColorType
+ * @returns {void}
+ */
+function handleHyperstarLaserCombo(hyperRow, hyperCol, laserColorType) {
+  const clearedCells = triggerHyperstarLaserCombo(grid, hyperRow, hyperCol, laserColorType);
+  const gained = calculateCascadeStepScore({
+    matchedGroups: [],
+    incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
+    comboCount: 1,
+  });
+  finishSwapActivatedCombo(clearedCells, gained, `hyperstar laser combo! ${signed(gained)}`);
+}
+
+/**
+ * Hyperstar + Hyperstar — clears the whole board. Mixed colors, same
+ * incidental-cell scoring reasoning as the laser combo above.
+ *
+ * @returns {void}
+ */
+function handleHyperstarDouble() {
+  const clearedCells = triggerHyperstarDouble(grid);
+  const gained = calculateCascadeStepScore({
+    matchedGroups: [],
+    incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
+    comboCount: 1,
+  });
+  finishSwapActivatedCombo(clearedCells, gained, `double hyperstar! ${signed(gained)}`);
+}
+
+/**
+ * Laser + Laser — combined row+column blast through the swap's
+ * destination cell. Mixed colors along the two lines, so again scored
+ * as incidental cells.
+ *
+ * @param {number} originRow - destination row (r2 from attemptSwap).
+ * @param {number} originCol - destination col (c2 from attemptSwap).
+ * @returns {void}
+ */
+function handleLaserCombo(originRow, originCol) {
+  const clearedCells = triggerLaserCombo(grid, originRow, originCol);
+  const gained = calculateCascadeStepScore({
+    matchedGroups: [],
+    incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
+    comboCount: 1,
+  });
+  finishSwapActivatedCombo(clearedCells, gained, `laser combo! ${signed(gained)}`);
 }
 
 /**
  * Attempts to swap two adjacent cells: performs the swap, plays the
- * slide animation, then (after the animation finishes) checks whether
- * it created a match. Valid swaps consume a move and kick off
- * resolveMatches(); invalid swaps slide back to their original spots.
+ * slide animation, then (after the animation finishes) checks what
+ * that swap actually did.
+ *
+ * Checked in this priority order once the swap has landed:
+ *   1. Hyperstar + Hyperstar  -> wipe the whole board
+ *   2. Hyperstar + Laser      -> convert-and-detonate combo
+ *   3. Hyperstar + anything else (normal gem, or a Star gem) -> classic same-color wipe
+ *   4. Laser + Laser          -> combined row+column blast at the destination
+ *   5. otherwise              -> normal findMatches() check, same as always
+ *
+ * Cases 1-4 are all swap-ACTIVATED — they happen because of WHAT was
+ * swapped together, not because of any pattern the swap happened to
+ * form — so none of them ever call findMatches() at all.
  *
  * @param {number} r1 - row of the first cell.
  * @param {number} c1 - column of the first cell.
@@ -366,10 +590,10 @@ function attemptSwap(r1, c1, r2, c2) {
 
   const pitch = computeCellPitch(boardEl);
 
-  // Captured BEFORE the swap: which cell (if either) held a Hypercube,
-  // and what gem type was at each cell. A Hypercube activates by being
-  // swapped with something, not by forming a normal match, so this has
-  // to be decided independently of findMatches().
+  // Captured BEFORE the swap: the gem type and special overlay (if
+  // any) sitting at each cell. Every combo check below needs to know
+  // what was THERE before the swap, since grid/specialGemState have
+  // already been swapped by the time this setTimeout runs.
   const preSwapType1 = grid[r1][c1];
   const preSwapType2 = grid[r2][c2];
   const preSwapSpecial1 = specialGemState.grid[r1][c1];
@@ -381,44 +605,53 @@ function attemptSwap(r1, c1, r2, c2) {
   animateSwap(boardEl, r1, c1, r2, c2, pitch);
 
   setTimeout(() => {
-    const hyperAt1 = preSwapSpecial1 === SPECIAL_GEM_TYPE.HYPERCUBE;
-    const hyperAt2 = preSwapSpecial2 === SPECIAL_GEM_TYPE.HYPERCUBE;
+    const hyperAt1 = preSwapSpecial1 === SPECIAL_GEM_TYPE.HYPERSTAR;
+    const hyperAt2 = preSwapSpecial2 === SPECIAL_GEM_TYPE.HYPERSTAR;
+    const laserAt1 = preSwapSpecial1 === SPECIAL_GEM_TYPE.LASER_ROW || preSwapSpecial1 === SPECIAL_GEM_TYPE.LASER_COL;
+    const laserAt2 = preSwapSpecial2 === SPECIAL_GEM_TYPE.LASER_ROW || preSwapSpecial2 === SPECIAL_GEM_TYPE.LASER_COL;
 
-    if (hyperAt1 || hyperAt2) {
-      // After the swap above, the Hypercube is now physically sitting
-      // at whichever cell it moved INTO; the gem type it's paired with
-      // is whatever was at the other cell before the swap.
-      const hyperRow = hyperAt1 ? r2 : r1;
-      const hyperCol = hyperAt1 ? c2 : c1;
-      const targetGemType = hyperAt1 ? preSwapType2 : preSwapType1;
-
-      moves--;
-      movesEl.textContent = moves;
-      comboCount = 0;
-
-      const clearedCells = triggerHypercube(
-        grid,
-        hyperRow,
-        hyperCol,
-        targetGemType,
-      );
-      const gained = calculateMatchScore(
-        clearedCells.length,
-        1,
-        BASE_GEM_SCORE,
-      );
-      const leveledUp = applyScoreGain(gained, `hypercube! +${gained}`);
-
-      markMatchedGems(boardEl, toBooleanGrid(clearedCells));
-
-      if (leveledUp) {
-        showLevelUpDialog(() => continueCascadeAfterMatch(clearedCells));
-      } else {
-        continueCascadeAfterMatch(clearedCells);
-      }
+    // --- case 1: Hyperstar + Hyperstar -> destroy the entire board ---
+    if (hyperAt1 && hyperAt2) {
+      handleHyperstarDouble();
       return;
     }
 
+    // --- case 2: Hyperstar + Laser -> convert every gem of that
+    // color into a laser (random orientation each) and detonate them all ---
+    if ((hyperAt1 && laserAt2) || (hyperAt2 && laserAt1)) {
+      // The Hyperstar physically ends up at whichever cell it moved
+      // INTO after the swap; the color it's paired with is whatever
+      // gem sat at the OTHER (laser) cell before the swap happened.
+      const hyperRow = hyperAt1 ? r2 : r1;
+      const hyperCol = hyperAt1 ? c2 : c1;
+      const laserColorType = hyperAt1 ? preSwapType2 : preSwapType1;
+      handleHyperstarLaserCombo(hyperRow, hyperCol, laserColorType);
+      return;
+    }
+
+    // --- case 3: Hyperstar + a normal gem (or a Star gem — treated
+    // the same way, since neither is a Hyperstar or a Laser) ->
+    // classic same-color wipe ---
+    if (hyperAt1 || hyperAt2) {
+      const hyperRow = hyperAt1 ? r2 : r1;
+      const hyperCol = hyperAt1 ? c2 : c1;
+      const targetGemType = hyperAt1 ? preSwapType2 : preSwapType1;
+      handleHyperstarSingle(hyperRow, hyperCol, targetGemType);
+      return;
+    }
+
+    // --- case 4: Laser + Laser (any orientation combination) ->
+    // combined row+column blast ---
+    if (laserAt1 && laserAt2) {
+      // "the point where it starts is the destination" — use the
+      // cell the player swapped INTO (r2, c2) as the single origin
+      // for both the row clear and the column clear.
+      handleLaserCombo(r2, c2);
+      return;
+    }
+
+    // --- case 5: nothing special activated by this swap — fall back
+    // to the normal match-detection flow, exactly as before ---
     const matched = findMatches(grid);
 
     if (!hasAnyMatch(matched)) {
@@ -432,8 +665,10 @@ function attemptSwap(r1, c1, r2, c2) {
       return;
     }
 
-    moves--;
-    movesEl.textContent = moves;
+    if (ENABLE_MOVES_LIMIT) {
+      moves--;
+      movesEl.textContent = moves;
+    }
     messageEl.textContent = '';
     comboCount = 0;
     resolveMatches();
@@ -560,11 +795,24 @@ function showBoonDialog(onContinue) {
     card.innerHTML = `<h3>${def.name}</h3><p>${def.description}</p>`;
     card.addEventListener('click', () => {
       pickBoon(def.id);
-      applyBoonEffect(def); // mutate gem base values / global score state
-      targetEl.textContent = progressionState.scoreTarget; // may have changed
+      applyBoonEffect(def);            // keep whatever your actual line does here
       boonDialogEl.classList.add('hidden');
-      onContinue();
+
+      const isBoardShapeBoon =
+        def.effect.kind === 'board_expand' ||
+        def.effect.kind === 'board_shrink' ||
+        def.effect.kind === 'board_expand_and_shrink';
+
+      if (isBoardShapeBoon) {
+        startTilePlacement(def, onContinue);
+      } else {
+        onContinue();
+      }
     });
+
+    // THE MISSING LINE — without this, `card` is fully built and
+    // wired up but never actually lives in the DOM, so the dialog
+    // opens with a title and an empty choices area.
     boonChoicesEl.appendChild(card);
   });
 
@@ -595,8 +843,12 @@ function checkEndState() {
     if (PREVENT_DEADLOCK) {
       messageEl.textContent = MESSAGES.RESHUFFLING;
       setTimeout(() => {
-        grid = createGridNoMatches();
-        tileState.blockedCells.forEach(([r, c]) => { grid[r][c] = BLOCKED; });
+        // Same "regenerate every usable cell" logic a boon placement uses
+        // (see rebuildGridRespectingBlocked() in tiles.js) — but a
+        // deadlock reshuffle, unlike a boon placement, wipes ALL special
+        // gems (resetSpecialGems()) rather than keeping them, since the
+        // whole point here is "nothing on this board works anymore."
+        rebuildGridRespectingBlocked(grid);
         resetSpecialGems();
         renderBoard(boardEl, grid, onCellClick);
       }, 400);
@@ -633,12 +885,6 @@ loseRestartBtn.addEventListener('click', () => {
 levelUpNextBtn.addEventListener('click', () => {
   levelUpDialogEl.classList.add('hidden');
   showBoonDialog(pendingContinuation);
-});
-constructBtn.addEventListener('click', () => enterPlacementMode('construct'));
-deconstructBtn.addEventListener('click', () => enterPlacementMode('deconstruct'));
-cancelPlacementBtn.addEventListener('click', cancelPlacement);
-shapeButtons.forEach(btn => {
-  btn.addEventListener('click', () => chooseShape(btn.dataset.shape));
 });
 
 applyStaticText();

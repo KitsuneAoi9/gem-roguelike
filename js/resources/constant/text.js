@@ -31,4 +31,11 @@ export const MESSAGES = {
   INVALID_SWAP: 'no match there — try another pair',
   RESHUFFLING: 'no moves left on the board — reshuffling',
   STUCK_BOARD: 'no moves left on the board',
+  // NEW — board expand/shrink placement errors. The "which shape /
+  // which action" part of the message DOES interpolate a runtime
+  // value (the shape's label), so that half stays as a template
+  // literal in main.js per Rule 7 — these two are only the fixed
+  // tail end of that message.
+  EXPAND_INVALID: "that spot won't work — the whole shape must land on empty space touching your current board, and stay within the board's outer limit",
+  SHRINK_INVALID: "that spot won't work — every cell in the shape must already be part of your board",
 };

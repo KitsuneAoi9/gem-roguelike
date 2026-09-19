@@ -49,28 +49,22 @@
         </div>
       </div>
 
+    <!-- board-wrap exists purely so the score popup can be positioned
+        absolutely relative to the board, above it — #board itself gets
+        its innerHTML wiped on every renderBoard() call, so the popup
+        can't live INSIDE #board or it'd get erased every redraw. -->
+    <div id="board-wrap" class="board-wrap">
+      <div id="score-popup" class="score-popup"></div>
       <div id="board"></div>
-      <div id="message">select a gem, then an adjacent one to swap</div>
+    </div>
+    <div id="message">select a gem, then an adjacent one to swap</div>
       <!-- Placeholder text below — main.js overwrites this on load from
-    resources/constant/constants.js (BUTTONS.RESET). -->
+      resources/constant/text.js (BUTTONS.RESET). -->
       <button id="reset">start over</button>
-      <div id="tile-controls" class="tile-controls">
-        <div class="tile-mode-buttons">
-          <button id="construct-btn">Construct</button>
-          <button id="deconstruct-btn">Deconstruct</button>
-        </div>
-        <div id="shape-picker" class="shape-picker hidden">
-          <button class="shape-btn" data-shape="ONE_BY_ONE">1×1</button>
-          <button class="shape-btn" data-shape="TWO_BY_TWO">2×2</button>
-          <button class="shape-btn" data-shape="ONE_BY_THREE">1×3</button>
-          <button class="shape-btn" data-shape="TWO_BY_THREE">2×3</button>
-          <button id="cancel-placement-btn">Cancel</button>
-        </div>
-      </div>
     </div>
 
     <!-- Placeholder text below — main.js overwrites this on load from
-  resources/constant/text.js (DIALOG_TITLES.*, BUTTONS.*). -->
+    resources/constant/text.js (DIALOG_TITLES.*, BUTTONS.*). -->
     <div id="lose-dialog" class="dialog-overlay hidden">
       <div class="dialog-box">
         <h2 id="lose-title">Out of moves</h2>

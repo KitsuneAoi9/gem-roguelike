@@ -190,4 +190,45 @@ const globalBoons = [
   },
 ];
 
-export const BOON_POOL = [...perGemBoons, ...globalBoons];
+// The Construction/Deconstruction boons. 
+const constructionDeconstructionBoons = [
+  // --- board shape boons (expand-board / shrink-board / risky combined) ---
+  {
+    id: 'quarry_extension',
+    name: 'Quarry Extension',
+    description: 'Grow your board with a 3×1 strip.',
+    type: BOON_TYPE.TILE_BASIC,
+    rarity: BOON_RARITY.UNCOMMON,
+    maxOccurrences: 3, // the board can always use more room, within the 20x20 ceiling
+    effect: { kind: 'board_expand', shape: 'THREE_BY_ONE' },
+  },
+  {
+    id: 'open_pit_expansion',
+    name: 'Open-Pit Expansion',
+    description: 'Grow your board with a 3×3 block.',
+    type: BOON_TYPE.TILE_EXPANDED,
+    rarity: BOON_RARITY.RARE,
+    maxOccurrences: 3,
+    effect: { kind: 'board_expand', shape: 'THREE_BY_THREE' },
+  },
+  {
+    id: 'condemned_shaft',
+    name: 'Condemned Shaft',
+    description: 'Remove a 1×1 cell from your board.',
+    type: BOON_TYPE.CURSE,
+    rarity: BOON_RARITY.COMMON,
+    maxOccurrences: 3,
+    effect: { kind: 'board_shrink', shape: 'ONE_BY_ONE' },
+  },
+  {
+    id: 'collapsing_vein',
+    name: 'Collapsing Vein',
+    description: 'Grow your board with a 5×1 strip, but a 3×1 strip elsewhere collapses.',
+    type: BOON_TYPE.CURSE, // RISKY_BUFF-flavored, matching Frenzy/global boons' spirit
+    rarity: BOON_RARITY.RARE,
+    maxOccurrences: 3,
+    effect: { kind: 'board_expand_and_shrink', expandShape: 'FIVE_BY_ONE', shrinkShape: 'THREE_BY_ONE' },
+  },
+]
+
+export const BOON_POOL = [...perGemBoons, ...globalBoons, ...constructionDeconstructionBoons];

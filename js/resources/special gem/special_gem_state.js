@@ -7,7 +7,7 @@
 // separate from the main grid so board.js doesn't need to know
 // anything about special gems to stay pure grid logic. No functions
 // here — the logic that reads/writes this lives in
-// js/gameplay/special_gems.js.
+// js/gameplay/special_gem.js.
 //
 // Starts empty ([]) rather than pre-sized, since sizing it needs SIZE
 // from board.js — a gameplay module resources/ shouldn't import.

@@ -73,7 +73,7 @@ Simple code gets light comments. More comments are expected around complicated b
 
 ### Rule 5 — One concern per module
 
-New concerns get their own file. Examples: `score.js` vs `board.js`; `tiles.js` + `tile_state.js`; `special_gems.js` + `special_gem_state.js` + `special_gem.js`; **`boon.js` (offer generation/picking) vs `boon_effects.js` (applying a picked boon's effect) vs `gem_base.js` (reading/writing per-gem base values)**.
+New concerns get their own file. Examples: `score.js` vs `board.js`; `tiles.js` + `tile_state.js`; `special_gem.js` + `special_gem_state.js` + `special_gem.js`; **`boon.js` (offer generation/picking) vs `boon_effects.js` (applying a picked boon's effect) vs `gem_base.js` (reading/writing per-gem base values)**.
 
 ### Rule 6 — `js/resources/` contains data/state only
 
@@ -98,7 +98,7 @@ The main grid never contains a special-gem type; that lives in `specialGemState.
 
 ### Rule 10 — File/folder naming convention
 
-- **Files** with more than one word use `snake_case` — e.g. `special_gems.js`, `gem_base_state.js`.
+- **Files** with more than one word use `snake_case` — e.g. `special_gem.js`, `gem_base_state.js`.
 - **Folders** with more than one word use a literal space — e.g. `special gem`, `base value`.
 - Single-word names (`board.js`, `boon`, `gem`) are unaffected.
 - Import paths into space-named folders must percent-encode the space as `%20` — see [Gotchas](#19-gotchas).
@@ -162,7 +162,7 @@ Game/
             ├── gem_base.js              (NEW — getGemBaseScore/Multiplier/Value(), resetGemBaseState())
             ├── shop.js
             ├── tiles.js
-            ├── special_gems.js          (resolveSpecialGems() now also returns matchedGroups/incidentalCells)
+            ├── special_gem.js          (resolveSpecialGems() now also returns matchedGroups/incidentalCells)
             └── main.js                  (updated: init() ordering, new score calls, boon-pick wiring)
 ```
 
@@ -259,7 +259,7 @@ Owns the full scoring pipeline for one cascade step — see [Section 8](#8-scori
 
 `getGemBaseScore(gemId)` / `getGemBaseMultiplier(gemId)` / `getGemBaseValue(gemId)` — the only place `DEFAULT_GEM_BASE_SCORE + delta` math happens. `resetGemBaseState()` — seeds `gemBaseState.perGem` with a zeroed delta for every gem id in `ALL_GEM_IDS` (active and locked).
 
-## `special_gems.js`
+## `special_gem.js`
 
 `resolveSpecialGems()` now also returns:
 - `matchedGroups: { gemType, length }[]` — each formed match group, with its **original** length (before a spawn cell is carved out of it)
