@@ -9,6 +9,7 @@
 
 import { DEFAULT_MOVES, BOARD_SIZE } from '../resources/constant/constants.js';
 import { progressionState } from '../resources/progression/progression.js';
+import { boonEffectState } from '../resources/boon/boon_effect_state.js';
 
 /**
  * Score needed to clear a given level.
@@ -20,7 +21,8 @@ import { progressionState } from '../resources/progression/progression.js';
  */
 export function calculateScoreTarget(level) {
   const raw = 500 * Math.pow(1.25, level - 1);
-  return Math.round(raw / 50) * 50;
+  const rounded = Math.round(raw / 50) * 50;
+  return Math.round(rounded * boonEffectState.targetScoreMultiplier);
 }
 
 /**

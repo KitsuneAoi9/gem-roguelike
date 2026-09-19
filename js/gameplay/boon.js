@@ -1,45 +1,27 @@
 // ============================================================
 // BOON.JS — offer generation + pick tracking.
 //
-// Reads/writes boonState (resources/boon/boonState.js) but owns none
-// of the state itself — same split as board.js (logic) vs. a grid
-// array (data), just for boons instead of the board.
+// Reads/writes boonState (resources/boon/) but owns none of the
+// state itself. Offer generation is rarity-weighted (BOON_RARITY_WEIGHTS)
+// and filters out gem-scoped boons for locked gems (gemUnlockState).
 // ============================================================
 
-import { BOON_POOL } from '../resources/boon/boonDefinitions.js';
-import { boonState } from '../resources/boon/boonState.js';
+import { BOON_POOL, BOON_RARITY_WEIGHTS } from '../resources/boon/boon.js';
+import { boonState } from '../resources/boon/boon_state.js';
+import { gemUnlockState } from '../resources/gem/gem_unlock_state.js';
 import { progressionState } from '../resources/progression/progression.js';
 
-/**
- * How many times a boon definition has already been picked this run.
- *
- * @param {string} boonId - id of the BoonDefinition to check.
- * @returns {number} times it appears in boonState.activeBoons.
- */
 function timesPicked(boonId) {
   return boonState.activeBoons.filter(b => b.id === boonId).length;
 }
 
-/**
- * Whether a boon definition can still be offered — false once it's
- * hit its maxOccurrences cap. null/undefined maxOccurrences means
- * unlimited (can always reappear, e.g. stacking small buffs).
- *
- * @param {object} def - a BOON_POOL entry.
- * @returns {boolean} true if it can still show up in an offer.
- */
+/** Respects the pick cap AND, for gem-scoped boons, whether that gem is unlocked. */
 function isBoonAvailable(def) {
+  if (def.effect?.gem && !gemUnlockState.unlocked[def.effect.gem]) return false;
   if (def.maxOccurrences == null) return true;
   return timesPicked(def.id) < def.maxOccurrences;
 }
 
-/**
- * Fisher-Yates shuffle — used to sample offers without bias toward
- * the pool's declaration order.
- *
- * @param {any[]} array - array to shuffle (not mutated).
- * @returns {any[]} a new, shuffled array.
- */
 function shuffle(array) {
   const copy = array.slice();
   for (let i = copy.length - 1; i > 0; i--) {
@@ -49,32 +31,61 @@ function shuffle(array) {
   return copy;
 }
 
-/**
- * Generates a fresh set of boon choices for the player to pick from —
- * distinct definitions, respecting each boon's maxOccurrences cap.
- * This is the "system generates three boons" step; it doesn't touch
- * boonState itself — nothing is picked until pickBoon() is called.
- *
- * @param {number} [count=3] - how many choices to offer.
- * @returns {object[]} up to `count` BoonDefinition objects (fewer if
- *   the available pool has run dry).
- */
-export function generateBoonOffer(count = 3) {
-  const available = BOON_POOL.filter(isBoonAvailable);
-  return shuffle(available).slice(0, count);
+/** Weighted rarity roll off BOON_RARITY_WEIGHTS. A future Luck stat adjusts these weights. */
+function rollRarity() {
+  const roll = Math.random();
+  let cumulative = 0;
+  for (const [rarity, weight] of Object.entries(BOON_RARITY_WEIGHTS)) {
+    cumulative += weight;
+    if (roll < cumulative) return rarity;
+  }
+  return 'common'; // fallback if weights don't sum to exactly 1
 }
 
 /**
- * Applies the player's choice: looks up the definition by id, records
- * it as an active boon, and returns the new instance so the caller
- * can react immediately if needed. This only tracks that the player
- * has the boon — applying its actual effect is up to the caller.
+ * Generates a fresh set of boon choices, rarity-weighted per
+ * BOON_RARITY_WEIGHTS rather than a flat uniform draw.
  *
- * @param {string} boonId - id of the chosen BoonDefinition.
- * @param {object} [data={}] - free-form per-instance data (e.g. a
- *   slot boon's chosen board position).
- * @returns {object|null} the new ActiveBoon, or null if boonId
- *   doesn't match any definition or is no longer available.
+ * @param {number} [count=3]
+ * @returns {object[]}
+ */
+export function generateBoonOffer(count = 3) {
+  const available = BOON_POOL.filter(isBoonAvailable);
+  const offer = [];
+  const usedIds = new Set();
+
+  // roll rarity, then pick randomly within that rarity
+  let attempts = 0;
+  while (offer.length < count && attempts < count * 50) {
+    attempts++;
+    const rarity = rollRarity();
+    const candidates = available.filter(def => def.rarity === rarity && !usedIds.has(def.id));
+    if (candidates.length === 0) continue; // unlucky/empty tier — reroll
+    const pick = candidates[Math.floor(Math.random() * candidates.length)];
+    offer.push(pick);
+    usedIds.add(pick.id);
+  }
+
+  // pool nearly exhausted — top up uniformly so the dialog isn't short a card
+  if (offer.length < count) {
+    const remaining = shuffle(available.filter(def => !usedIds.has(def.id)));
+    for (const def of remaining) {
+      if (offer.length >= count) break;
+      offer.push(def);
+    }
+  }
+
+  return offer;
+}
+
+/**
+ * Records the player's pick in boonState. Does NOT apply the boon's
+ * effect — see js/gameplay/boon_effects.js's applyBoonEffect(), called
+ * separately by main.js right after this.
+ *
+ * @param {string} boonId
+ * @param {object} [data={}]
+ * @returns {object|null}
  */
 export function pickBoon(boonId, data = {}) {
   const def = BOON_POOL.find(b => b.id === boonId);
@@ -89,25 +100,6 @@ export function pickBoon(boonId, data = {}) {
   return activeBoon;
 }
 
-/**
- * Clears all active boons. Call from main.js's init() so "start over"
- * begins a run with no boons picked.
- *
- * @returns {void}
- */
 export function resetBoons() {
   boonState.activeBoons.length = 0;
 }
-
-
-// TODO
-/*
-Notes on the two "take note" cases
-Infinite boons (maxOccurrences: null) can be re-offered and re-picked indefinitely — good fit for stacking small buffs like Diamond Windfall.
-Capped boons (maxOccurrences: 1 or 2) stop showing up in generateBoonOffer() once picked that many times — isBoonAvailable() checks this by counting matching entries already in boonState.activeBoons, so there's no separate counter to keep in sync.
-
-What's left for you
-Wiring generateBoonOffer() into a trigger point (the obvious one is right after advanceLevel() in main.js's level-up block) and a choice UI.
-Calling resetBoons() from init() alongside resetProgression(1).
-Reading boonState.activeBoons wherever you implement the actual effects (score.js for the scoring-related ones; for TILE_BASIC/TILE_EXPANDED boons, call constructTile() from js/gameplay/tiles.js with the boon's effect.tileShape rather than writing separate placement logic — that's the intended hookup between the boon and tile systems).
-*/

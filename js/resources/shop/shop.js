@@ -3,9 +3,9 @@
 // plus the fixed shop-wide settings (how often it opens, how many
 // items it shows, how many consumables the player can hold).
 //
-// Same role as boonDefinitions.js: fixed, game-wide data. Each pool
+// Same role as boon.js: fixed, game-wide data. Each pool
 // entry is a *template* — js/gameplay/shop.js turns a purchased
-// template into an OwnedItem instance (see shopState.js) when the
+// template into an OwnedItem instance (see shop_state.js) when the
 // player buys it. `effect` is a free-form payload — shop.js
 // (gameplay) never looks inside it; that's yours to read from
 // wherever you apply the actual item effects.

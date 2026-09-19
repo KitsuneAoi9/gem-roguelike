@@ -17,12 +17,11 @@ import {
   computeCellPitch, animateSwap
 } from './render.js';
 
-import { calculateMatchScore } from './score.js';
+import { calculateCascadeStepScore } from './score.js';
 
 import {
-  PREVENT_DEADLOCK, DEFAULT_SCORE, POINTS_PER_GEM,
-  SWAP_ANIM_MS, MATCH_CLEAR_DELAY_MS, CASCADE_CHECK_DELAY_MS,
-  LEVEL_UP_BONUS_MOVES
+  PREVENT_DEADLOCK, DEFAULT_SCORE, SWAP_ANIM_MS, MATCH_CLEAR_DELAY_MS,
+  CASCADE_CHECK_DELAY_MS, LEVEL_UP_BONUS_MOVES, ENABLE_MOVES_LIMIT
 } from '../resources/constant/constants.js';
 
 import {
@@ -32,13 +31,14 @@ import {
 import { progressionState } from '../resources/progression/progression.js';
 import { resetProgression, advanceLevel } from './progression.js';
 import { resetBoons, generateBoonOffer, pickBoon } from './boon.js';
+import { applyBoonEffect, resetBoonEffects } from './boon_effects.js';
 import { TILE_SHAPES } from '../resources/constant/constants.js';
-import { tileState } from '../resources/tile/tileState.js';
+import { tileState } from '../resources/tile/tile_state.js';
 import { constructTile, deconstructTile, resetTiles } from './tiles.js';
 
-import { SPECIAL_GEM_TYPE } from '../resources/specialGem/specialGemDefinitions.js';
-import { specialGemState } from '../resources/specialGem/specialGemState.js';
-import { resolveSpecialGems, applySpawns, clearSpecialGems, triggerHypercube, resetSpecialGems } from './specialGems.js';
+import { SPECIAL_GEM_TYPE } from '../resources/special%20gem/special_gem.js';
+import { specialGemState } from '../resources/special%20gem/special_gem_state.js';
+import { resolveSpecialGems, applySpawns, clearSpecialGems, triggerHypercube, resetSpecialGems } from './special_gems.js';
 
 // --- DOM references, grabbed once ---
 const boardEl         = document.getElementById('board');
@@ -76,11 +76,11 @@ const cancelPlacementBtn = document.getElementById('cancel-placement-btn');
 let grid;
 let score;
 let moves;
-let selected;       // [r, c] of the currently selected cell, or null
-let placementMode;  // 'construct' | 'deconstruct' | null — which action is armed
+let selected; // [r, c] of the currently selected cell, or null
+let placementMode; // 'construct' | 'deconstruct' | null — which action is armed
 let placementShape; // key into SLOT_SHAPES, or null until the player picks one
-let busy;           // true while an animation/cascade is resolving — blocks input
-let comboCount;     // how many cascade steps deep we are within one swap; resets each new swap
+let busy; // true while an animation/cascade is resolving — blocks input
+let comboCount; // how many cascade steps deep we are within one swap; resets each new swap
 
 // Set by showLevelUpDialog(); holds the "resume the cascade" callback
 // that the boon dialog invokes once the player has picked a boon.
@@ -119,6 +119,11 @@ function toBooleanGrid(cells) {
   const g = Array.from({ length: SIZE }, () => Array(SIZE).fill(false));
   cells.forEach(([r, c]) => { g[r][c] = true; });
   return g;
+}
+
+/** Formats a score delta with an explicit sign; negative values keep their own "-". */
+function signed(amount) {
+  return amount >= 0 ? `+${amount}` : `${amount}`;
 }
 
 /**
@@ -164,6 +169,9 @@ function applyScoreGain(gained, comboMessage) {
  * @returns {void}
  */
 function init() {
+  // reset boon-driven state BEFORE progression — calculateScoreTarget()
+  // reads the target-score multiplier, which must be back at 1.0 first
+  resetBoonEffects();
   // "start over" always begins a fresh run at level 1
   resetProgression(1);
   resetBoons();
@@ -302,8 +310,8 @@ function chooseShape(shapeKey) {
   placementShape = shapeKey;
   shapePickerEl.classList.add('hidden');
   messageEl.textContent = placementMode === 'construct'
-    ? `click a cell for the top-left of your ${TILE_SHAPES[shapeKey].label} tile`
-    : `click a cell for the top-left of the ${TILE_SHAPES[shapeKey].label} area to remove`;
+      ? `click a cell for the top-left of your ${TILE_SHAPES[shapeKey].label} tile`
+      : `click a cell for the top-left of the ${TILE_SHAPES[shapeKey].label} area to remove`;
 }
 
 /**
@@ -388,8 +396,17 @@ function attemptSwap(r1, c1, r2, c2) {
       movesEl.textContent = moves;
       comboCount = 0;
 
-      const clearedCells = triggerHypercube(grid, hyperRow, hyperCol, targetGemType);
-      const gained = calculateMatchScore(clearedCells.length, 1, POINTS_PER_GEM);
+      const clearedCells = triggerHypercube(
+        grid,
+        hyperRow,
+        hyperCol,
+        targetGemType,
+      );
+      const gained = calculateMatchScore(
+        clearedCells.length,
+        1,
+        BASE_GEM_SCORE,
+      );
       const leveledUp = applyScoreGain(gained, `hypercube! +${gained}`);
 
       markMatchedGems(boardEl, toBooleanGrid(clearedCells));
@@ -442,11 +459,11 @@ function resolveMatches() {
 
   comboCount++; // this cascade step counts as one combo hit
 
-  const { clearedCells, spawns } = resolveSpecialGems(grid, matched);
+  const { clearedCells, spawns, matchedGroups, incidentalCells } = resolveSpecialGems(grid, matched);
   applySpawns(spawns);
 
-  const gained = calculateMatchScore(clearedCells.length, comboCount, POINTS_PER_GEM);
-  const comboMessage = comboCount > 1 ? `combo x${comboCount}! +${gained}` : `+${gained}`;
+  const gained = calculateCascadeStepScore({ matchedGroups, incidentalCells, comboCount });
+  const comboMessage = comboCount > 1 ? `combo x${comboCount}! ${signed(gained)}` : signed(gained);
   const leveledUp = applyScoreGain(gained, comboMessage);
 
   markMatchedGems(boardEl, toBooleanGrid(clearedCells));
@@ -466,16 +483,38 @@ function resolveMatches() {
  * level-up dialog can defer this step until the player is ready to
  * continue, instead of it always firing on a timer.
  *
- * @param {boolean[][]} clearedCells - grid returned by findMatches() for
- *   the match that was just resolved.
+ * This function is deliberately two nested setTimeouts, not one:
+ *   1. MATCH_CLEAR_DELAY_MS   — waits for the "pop" animation
+ *      (gems.css, .matched) to finish playing before the DOM is
+ *      rebuilt out from under it. If we cleared/rebuilt immediately,
+ *      the pop animation would get cut off mid-play.
+ *   2. CASCADE_CHECK_DELAY_MS — a short pause AFTER the board has
+ *      re-rendered post-collapse, purely so a cascade match doesn't
+ *      pop into view instantly. Purely cosmetic pacing, not needed
+ *      for correctness.
+ *
+ * @param {[number, number][]} clearedCells - flat list of [row, col]
+ *   pairs to clear, as returned by resolveSpecialGems() (normal match
+ *   path) or triggerHypercube() (swap-activation path). NOT a
+ *   boolean grid — do not confuse with findMatches()'s return shape.
  * @returns {void}
  */
 function continueCascadeAfterMatch(clearedCells) {
+  // wait out the pop animation before touching the grid/DOM again
   setTimeout(() => {
+    // mark cleared cells transient (-1), not BLOCKED — collapseAndFill()
+    // will fill these back in below
     clearedCells.forEach(([r, c]) => { grid[r][c] = -1; });
+
+    // wipe the overlay BEFORE gravity, so no stale special flag
+    // carries onto whatever gem falls into that spot
     clearSpecialGems(clearedCells);
+
+    // gravity + refill; overlay rides along as a parallel grid
     collapseAndFill(grid, [specialGemState.grid]);
     renderBoard(boardEl, grid, onCellClick);
+
+    // short cosmetic pause, then check for a cascade
     setTimeout(resolveMatches, CASCADE_CHECK_DELAY_MS);
   }, MATCH_CLEAR_DELAY_MS);
 }
@@ -514,14 +553,15 @@ function showBoonDialog(onContinue) {
   }
 
   boonChoicesEl.innerHTML = '';
-  // Build a card for each boon in the offer. Clicking a card picks
-  // that boon and closes the dialog.
+  // one card per offered boon
   offer.forEach(def => {
     const card = document.createElement('div');
     card.className = 'boon-card';
     card.innerHTML = `<h3>${def.name}</h3><p>${def.description}</p>`;
     card.addEventListener('click', () => {
       pickBoon(def.id);
+      applyBoonEffect(def); // mutate gem base values / global score state
+      targetEl.textContent = progressionState.scoreTarget; // may have changed
       boonDialogEl.classList.add('hidden');
       onContinue();
     });
@@ -539,7 +579,8 @@ function showBoonDialog(onContinue) {
  * @returns {void}
  */
 function checkEndState() {
-  if (moves <= 0) {
+  // moves-left loss is shelved behind ENABLE_MOVES_LIMIT — see constants.js
+  if (ENABLE_MOVES_LIMIT && moves <= 0) {
     if (score >= progressionState.scoreTarget) {
       messageEl.textContent = `target reached — final score ${score}`;
     } else {

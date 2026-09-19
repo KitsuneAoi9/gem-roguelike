@@ -1,26 +1,78 @@
+Before I answer, I want to clarify two things. 
 
-1. Rewrite the comment here
+1. It is okay for the score to be negative after calculation. It's the player job to keep it balance. The total score won't likely reach negative. (Update this to the handoff file if you think it's needed).
+2. I made a mistake with Match-4 and Match-5, their base score, should be 60 and 125 respectively. Apply match 5 calculation whenever you matches 5 or more.
+For example, match 4 will give you a base score 60 = (Base Gem Value * 4 * Base Multiplier).
 
-/**
- * Clears matched cells, lets gravity + refill run, and schedules the
- * next cascade check. Split out from resolveMatches() so the
- * level-up dialog can defer this step until the player is ready to
- * continue, instead of it always firing on a timer.
- *
- * @param {boolean[][]} clearedCells - grid returned by findMatches() for
- *   the match that was just resolved.
- * @returns {void}
- */
-function continueCascadeAfterMatch(clearedCells) {
-  setTimeout(() => {
-    clearedCells.forEach(([r, c]) => { grid[r][c] = -1; });
-    clearSpecialGems(clearedCells);
-    collapseAndFill(grid, [specialGemState.grid]);
-    renderBoard(boardEl, grid, onCellClick);
-    setTimeout(resolveMatches, CASCADE_CHECK_DELAY_MS);
-  }, MATCH_CLEAR_DELAY_MS);
-}
 
-2. Change the boonDefinitions to boon
-3. Change the specialGemDefinitions to specialGem
-4. Redo the Mark down
+Section A. Global score bonus (item 1)
+
+Q: Where does this sit relative to Frenzy's penalty? 
+A: For frenzy, it is just straight up reduction/addition after everything is calculated, but before the final global score bonus.
+It has nothing to do with the global score bonus.
+
+For now, only these 4 boons boosts the global score bonus multiplier and flat number (I have also updated the description in my sheet to specifically state global score bonus)
+Gemstone Gamble
+Trinket Wager
+Gem Greed
+Jewel Avarice
+
+Q: Does "applied after each combo" mean per cascade step, i.e. combo 1 gets its own ×globalMult + globalBonus, then combo 2 separately gets ×globalMult + globalBonus? 
+A: Yes, per cascade step.
+
+Q: Gem Greed / Jewel Avarice say "increase the global score multiplier by +1/+4" — are these the same global multiplier from item 1 (starts at 1.0x, so one Gem Greed pick → 2.0x), and do repeated picks (max 10) stack additively (+1 each) rather than multiplicatively?
+A: Yes, they stack additively. So after picking 10 of them, the global score bonus multiplier is 10. Let's say the matching scores 300, you will then earn 300x10= 3000 points of score (assuming the global score bonus multiplier is 10 )
+
+Q: For Gem Greed/Jewel Avarice's "increase target score by +50%/+150%" — does this stack additively across picks (two Gem Greeds → +100% total, i.e. 2.0× target) or multiplicatively (1.5 × 1.5 = 2.25×)?
+A: Any description that uses % means it will be stacked multiplicatively. Otherwise, it will be stacked additively.
+
+Section B. Per-gem base score / multiplier (Bounty/Brilliance/Carat, Enthusiast/Addict/Fanatic)
+
+Q. These need a mutable per-gem-type base score and base multiplier, separate from the fixed BASE_GEM_SCORE/BASE_GEM_MULTIPLIER constants — since boons permanently raise/lower them per gem. I'm planning a new resource, e.g. resources/base value/gem_base_state.js, holding a per-gem-index { score, multiplier } that starts at the constant default and gets mutated in place when a relevant boon is picked. Sound right, or did you want this computed on the fly by summing over boonState.activeBoons each time instead of mutating a persistent value?
+A. For the BASE_GEM_SCORE, I wanted them to be for each base score for each types of the gems. There is no global base gem score, just gem-specific base gem score. The boons will raise/lower the value until the game is over.
+
+Q: Bounty (+25, COMMON, unlimited) / Brilliance (+50, RARE, unlimited) / Carat (+250, EPIC, cap 5) all do the exact same thing (raise one gem's base score) at different magnitudes/rarities/caps — confirming that's intentional (three tiers of the same effect, not something progressive/exclusive).
+A: Yes, that is intentional. I forgot to mention this. This is the rarity appearance odds: Common: 60% | Rare: 28% | Epic: 10% | Legendary: 2% (Increased by Luck stat). For now, no need to implement the luck stat, but keep that in mind for the future.
+
+Also, I make a small change, for the frenzy, you will lose -5 bonus score instead. Otherwise, it would be too strong.
+
+Section C. Affinity (per the memo)
+
+Q: The memo says Affinity should become "base gem score of [type] increased" instead of a per-match bonus — meaning amethyst_affinity (+50, COMMON, cap 5) would do exactly the same thing as amethyst_bounty (+25, COMMON, unlimited), just a different number and a cap. Is that really the intent (two same-shaped common boons per gem, differing only in magnitude/cap), or should Affinity keep its original "+50 score awarded per match" behavior (a per-match bonus, not a base-value change) and the memo change gets applied to a future revision instead of this draft?
+A: Sorry, I didn't explain this part fully. While on the surface they look they same, in reality they are quite different. For example, without any boon, when you match 3, you just gain 30 points, 60 if you match 4. If you have only amethyst affinity, when you match 3, you gain 30 + 50 = 80 points, 100 points if you match 4. However, if you have only amethyst bounty, since each gems now worth 35 points, when you match 3, you gain 35x3 = 105, 35x4x1.5 = 210 points if you match 4
+
+
+Section D. Frenzy / Lust / Maniac (the "X gains, everything else loses" boons)
+
+Q. Frenzy (+100/-50) — is this a per-match flat bonus/penalty (added once whenever a match happens, regardless of match size), applied at the "after multiplier, before global bonus" stage per Mat's memo?
+A. These bonus only lasts until the game is over. When the game restarts or when you start over, you lose all of these boons bonus. They are not meta-progression but rather run-progression. To answer your question, yes they are per-match flat/bonus/penalty but before global score calculation like i mention in section A
+
+Q. Lust (+150 to one gem's base score, -10 to every other gem's base score) and Maniac (+2.0 to one gem's base multiplier, -0.5 to every other gem's base multiplier) — these directly mutate the per-gem base-value table from item B. Do the negative penalties apply to all currently-unlocked gems at pick time (so future-unlocked gems like Onyx aren't retroactively penalized if unlocked later, only affected if already unlocked when picked)? And do repeated picks of the same Lust/Maniac stack (multiple -10's accumulating on the other gems)?
+A. Yes, they do affect them. So future-unlocked gems like Onyx will received the buff/penalty as well.
+
+
+Q: Data bug I noticed: bloodstone_affinity and pearl_affinity IDs are reused for what are clearly the Frenzy rows (name says "Bloodstone Frenzy"/"Pearl Frenzy"). I'll fix these to bloodstone_frenzy/pearl_frenzy unless you tell me otherwise.
+A: Yeah, those are bugs. My bad.
+
+Section E. Gemstone Gamble / Trinket Wager
+
+Q. These require classifying gems into "Gemstone" vs "Trinket" categories, which doesn't exist anywhere in the current data model (GEM_DEFINITIONS has no category field). What's the split? (e.g., are "Trinket" the shop items — artifacts/relics/fossils — rather than gems at all, and "Gemstone" means any gem match? That would make more sense than splitting gems into two arbitrary categories, but I want to confirm before inventing a taxonomy.)
+A. Those are just name of the boon. You can ignore them and implement their effect when you select that boon
+
+Section F. Locked gems (Onyx/Aquamarine/Bloodstone/Pearl) — item 2
+Q: There's currently no research/upgrade system in the codebase at all .
+A: Yes, just the flag + filtering logic now, with no way to flip it yet (stub for a future research system),.
+
+Section G. Existing placeholder pool
+
+Q: Your current BOON_POOL has 8 draft entries 
+A: Remove those draft entries entirely. Just follow the one I sent to you.
+
+Q: As for BUFF, BUFF_WITH_DRAWBACK, TILE_BASIC, TILE_EXPANDED, CURSE
+A: Yes, change BUFF_WITH_DRAWBACK to RISKY_BUFF
+
+A: As for the tile-related ones
+A: I will send you the list after this one is done.
+
+
+

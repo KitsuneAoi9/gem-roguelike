@@ -7,8 +7,8 @@
 
 import { SIZE, BLOCKED } from './board.js';
 import { GEM_DEFINITIONS } from '../resources/constant/constants.js';
-import { tileState  } from '../resources/tile/tileState.js';
-import { specialGemState } from '../resources/specialGem/specialGemState.js';
+import { tileState } from '../resources/tile/tile_state.js';
+import { specialGemState } from '../resources/special%20gem/special_gem_state.js';
 
 /**
  * Rebuilds the #board element from scratch based on the current grid.

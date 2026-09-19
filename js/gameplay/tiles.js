@@ -11,7 +11,7 @@
 
 import { SIZE, BLOCKED } from './board.js';
 import { TILE_SHAPES } from '../resources/constant/constants.js';
-import { tileState } from '../resources/tile/tileState.js';
+import { tileState } from '../resources/tile/tile_state.js';
 
 let nextTileId = 1;
 

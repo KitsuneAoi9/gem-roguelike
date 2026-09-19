@@ -1,7 +1,7 @@
 // ============================================================
 // SHOP.JS — offer generation, purchase logic, shop-trigger check.
 //
-// Reads/writes shopState (resources/shop/shopState.js) but owns none
+// Reads/writes shopState (resources/shop/shop_state.js) but owns none
 // of the state itself — same split as board.js (logic) vs. a grid
 // array (data), just for the shop instead of the board.
 // ============================================================
@@ -10,7 +10,7 @@ import {
   ITEM_CATEGORY, SHOP_ITEM_POOL, SHOP_LEVEL_INTERVAL,
   SHOP_MAIN_ITEM_COUNT, SHOP_CONSUMABLE_ITEM_COUNT, MAX_CONSUMABLES_HELD
 } from '../resources/shop/shop.js';
-import { shopState } from '../resources/shop/shopState.js';
+import { shopState } from '../resources/shop/shop_state.js';
 
 /**
  * Whether a level should trigger a shop visit. Meant to be called

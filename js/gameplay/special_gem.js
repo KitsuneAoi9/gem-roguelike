@@ -1,5 +1,5 @@
 // ============================================================
-// SPECIALGEMS.JS — special gem spawning + activation logic.
+// SPECIAL_GEM.JS — special gem spawning + activation logic.
 //
 // Reads/writes specialGemState (resources/specialGem/) but owns none
 // of it — same split as boon.js/shop.js/tiles.js. The one thing this
@@ -10,8 +10,8 @@
 // ============================================================
 
 import { SIZE, BLOCKED } from './board.js';
-import { SPECIAL_GEM_TYPE } from '../resources/specialGem/specialGemDefinitions.js';
-import { specialGemState } from '../resources/specialGem/specialGemState.js';
+import { SPECIAL_GEM_TYPE } from '../resources/special%20gem/special_gem.js';
+import { specialGemState } from '../resources/special%20gem/special_gem_state.js';
 
 function inBounds(row, col) {
   return row >= 0 && row < SIZE && col >= 0 && col < SIZE;
@@ -129,23 +129,18 @@ function starBlastCells(row, col) {
 }
 
 /**
- * Resolves one round of matches: figures out which matched cells
- * spawn a new special gem (reserving that cell instead of clearing
- * it), and chains through any *existing* special gems caught up in
- * the match, expanding the cleared set with each one's blast pattern
- * — a Flame clearing another Flame's row/column can trigger that one
- * too, and so on.
+ * Resolves one round of matches: spawn decisions, chain-reaction
+ * expansion, AND (new) a scoring breakdown — which cleared cells came
+ * from a formed match (matchedGroups) vs. a chain-reaction blast
+ * (incidentalCells) — so score.js can score them differently.
  *
- * Doesn't touch the grid itself — main.js still sets cleared cells to
- * -1 and calls collapseAndFill(); this just says which cells that is,
- * and which cell(s) to leave alone because a special is spawning
- * there instead.
- *
- * @param {number[][]} grid - current grid, read-only here.
- * @param {boolean[][]} matched - result of findMatches() for this pass.
+ * @param {number[][]} grid
+ * @param {boolean[][]} matched
  * @returns {{
  *   clearedCells: [number, number][],
  *   spawns: {type: string, row: number, col: number}[],
+ *   matchedGroups: { gemType: number, length: number }[],
+ *   incidentalCells: { gemType: number, row: number, col: number }[],
  * }}
  */
 export function resolveSpecialGems(grid, matched) {
@@ -158,21 +153,21 @@ export function resolveSpecialGems(grid, matched) {
     }
   }
 
+  // snapshot BEFORE blast expansion — everything in here was part of
+  // a formed match this pass; scoring uses this to spot incidental cells
+  const originalMatchedKeys = new Set(clearedKeys);
+
   const spawns = [];
   const spawnKeys = new Set();
   for (const group of groups) {
     const spawn = classifyGroup(group);
     if (!spawn) continue;
     const key = `${spawn.row},${spawn.col}`;
-    if (spawnKeys.has(key)) continue; // two groups picked the same cell — keep the first
+    if (spawnKeys.has(key)) continue;
     spawns.push(spawn);
     spawnKeys.add(key);
   }
 
-  // Chain through existing special gems caught in this match: each
-  // one's blast pattern adds more cells, which can catch *another*
-  // existing special, and so on. A queue instead of recursion avoids
-  // re-processing the same gem twice.
   const queue = [...clearedKeys];
   const processed = new Set();
   while (queue.length) {
@@ -186,10 +181,10 @@ export function resolveSpecialGems(grid, matched) {
 
     const blast = specialType === SPECIAL_GEM_TYPE.FLAME ? flameBlastCells(r, c)
       : specialType === SPECIAL_GEM_TYPE.STAR ? starBlastCells(r, c)
-      : []; // Hypercube doesn't blast on being matched — see triggerHypercube()
+      : [];
 
     for (const [br, bc] of blast) {
-      if (!inBounds(br, bc) || grid[br][bc] == null) continue; // off-board or BLOCKED
+      if (!inBounds(br, bc) || grid[br][bc] == null) continue;
       const bKey = `${br},${bc}`;
       if (!clearedKeys.has(bKey)) {
         clearedKeys.add(bKey);
@@ -198,11 +193,21 @@ export function resolveSpecialGems(grid, matched) {
     }
   }
 
-  // Spawn cells survive this pass — pull them back out of the cleared set.
   for (const key of spawnKeys) clearedKeys.delete(key);
 
   const clearedCells = [...clearedKeys].map(key => key.split(',').map(Number));
-  return { clearedCells, spawns };
+
+  // scoring breakdown — group length uses the ORIGINAL match size (a
+  // match-4 still scores as 4 even though one cell survives as a spawn)
+  const matchedGroups = groups.map(g => ({ gemType: g.gemType, length: g.cells.length }));
+  const incidentalCells = [...clearedKeys]
+    .filter(key => !originalMatchedKeys.has(key))
+    .map(key => {
+      const [r, c] = key.split(',').map(Number);
+      return { gemType: grid[r][c], row: r, col: c };
+    });
+
+  return { clearedCells, spawns, matchedGroups, incidentalCells };
 }
 
 /**

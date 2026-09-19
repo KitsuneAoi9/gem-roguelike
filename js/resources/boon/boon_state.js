@@ -1,5 +1,5 @@
 // ============================================================
-// BOONSTATE.JS — mutable, per-run FIELD VARIABLES.
+// BOON_STATE.JS — mutable, per-run FIELD VARIABLES.
 //
 // Same role as progressionState: holds what's true right now, not
 // what's fixed forever. `activeBoons` is the list of boons the
