@@ -1,0 +1,15 @@
+/* ============================================================
+   SWAP ANIMATION
+   render.js rebuilds the whole board on every change, so there's no
+   persistent DOM element to animate between two positions the normal
+   way. Instead: JS sets a gem's transform to where it *used to be*
+   (instantly, no transition), then this class's transition takes over
+   as JS resets the transform to 0 — the gem visibly slides into place.
+
+   220ms below must match SWAP_ANIM_MS in resources/constants.js,
+   since main.js waits that long before checking match results.
+   ============================================================ */
+
+.gem-swap-transition {
+  transition: transform 220ms ease;
+}

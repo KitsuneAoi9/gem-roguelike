@@ -1,0 +1,56 @@
+/* ============================================================
+   GEM VISUALS
+   Shape and color for each gem type now live in the .svg files in
+   css/model/svg/ — render.js sets each .gem's background-image to
+   the right one. This file only controls how that image is displayed
+   and animated. 
+   ============================================================ */
+
+.gem {
+  width: 78%;
+  height: 78%;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  transition: transform 0.18s cubic-bezier(.4,1.6,.6,1), opacity 0.18s ease;
+}
+
+/* Matched gems play this pop-and-shrink before being removed from the DOM */
+.gem.matched {
+  animation: pop 0.28s ease forwards;
+}
+
+@keyframes pop {
+  0%   { transform: scale(1);   opacity: 1; }
+  60%  { transform: scale(1.3); opacity: 0.8; }
+  100% { transform: scale(0);   opacity: 0; }
+}
+
+/* ============================================================
+   SPECIAL GEMS
+   No dedicated art yet — a pulsing colored glow layered on top of
+   the gem's normal SVG is enough to read as "this one's special"
+   until real Flame/Star/Hypercube art exists.
+   ============================================================ */
+
+.gem--special {
+  position: relative;
+}
+
+.gem--special::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: special-pulse 1.4s ease-in-out infinite;
+}
+
+.gem--flame::after     { box-shadow: 0 0 10px 3px rgba(224, 90, 44, 0.85); }
+.gem--star::after      { box-shadow: 0 0 10px 3px rgba(224, 179, 74, 0.85); }
+.gem--hypercube::after { box-shadow: 0 0 10px 3px rgba(150, 190, 255, 0.9); }
+
+@keyframes special-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.08); }
+}

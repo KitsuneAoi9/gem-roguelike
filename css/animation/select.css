@@ -1,0 +1,17 @@
+/* ============================================================
+   SELECT ANIMATION
+   Applied to a .gem (not its parent .cell) via render.js whenever
+   that gem becomes the selected one. Keep duration in sync with
+   this being a "one-shot" feel — it should read as instant feedback,
+   not a delay before the player can act.
+   ============================================================ */
+
+.gem.selected {
+  animation: gem-select 0.4s ease forwards;
+}
+
+@keyframes gem-select {
+  0%   { transform: translateY(0)    rotate(0deg); }
+  60%  { transform: translateY(-8px) rotate(220deg); }
+  100% { transform: translateY(-6px) rotate(360deg); } /* stays lifted while selected */
+}

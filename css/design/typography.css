@@ -1,0 +1,64 @@
+/* ============================================================
+   TYPOGRAPHY
+   Two font roles: a serif for the title/mood, a sans-serif for
+   data/UI text (scores, labels, messages).
+   ============================================================ */
+
+body {
+  font-family: 'Georgia', 'Iowan Old Style', serif;
+}
+
+.masthead {
+  text-align: center;
+  margin-bottom: 6px;
+}
+
+.masthead h1 {
+  font-size: 2.1rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+
+.masthead p,
+.stat .l,
+#message,
+button#reset {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+}
+
+.masthead p {
+  font-size: 0.82rem;
+  color: var(--paper-dim);
+  margin: 6px 0 0;
+  letter-spacing: 0.03em;
+}
+
+.stat { text-align: center; }
+
+.stat .n {
+  font-size: 1.6rem;
+  font-variant-numeric: tabular-nums; /* keeps digits from shifting width as score changes */
+  color: var(--gold);
+  line-height: 1;
+}
+
+.stat .l {
+  font-size: 0.68rem;
+  color: var(--paper-dim);
+  margin-top: 4px;
+  letter-spacing: 0.04em;
+}
+
+#message {
+  margin-top: 16px;
+  min-height: 1.2em; /* reserves space so layout doesn't jump when text appears/clears */
+  font-size: 0.82rem;
+  color: var(--paper-dim);
+  letter-spacing: 0.02em;
+}
+
+button#reset {
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+}

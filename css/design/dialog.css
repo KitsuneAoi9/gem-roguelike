@@ -1,0 +1,111 @@
+/* ============================================================
+   MODAL DIALOGS
+   Shared overlay/box look for every modal in the game — the lose
+   dialog, the level-cleared dialog, and the boon-pick dialog below.
+   `.hidden` is toggled by main.js; this file only defines what
+   "shown" looks like for each.
+   ============================================================ */
+
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(23, 19, 23, 0.72); /* --rock-deep, translucent */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.dialog-overlay.hidden {
+  display: none;
+}
+
+.dialog-box {
+  background: var(--rock);
+  border: 1px solid var(--vein);
+  border-radius: 6px;
+  padding: 28px 32px;
+  text-align: center;
+  box-shadow: 0 20px 40px -20px rgba(0,0,0,0.6);
+  max-width: 280px;
+}
+
+.dialog-box h2 {
+  margin: 0 0 8px;
+  font-family: 'Georgia', 'Iowan Old Style', serif;
+  font-weight: 400;
+  color: var(--paper);
+}
+
+.dialog-box p {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.82rem;
+  color: var(--paper-dim);
+  margin: 0 0 18px;
+}
+
+.dialog-box button {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+  background: none;
+  border: 1px solid var(--vein);
+  color: var(--paper);
+  padding: 8px 18px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.dialog-box button:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+/* ============================================================
+   BOON DIALOG
+   Extends the base .dialog-box look for a pick-one-of-three boon
+   choice screen. There's no separate "confirm" button — clicking a
+   card picks it immediately and closes the dialog (see main.js's
+   showBoonDialog()). Hover highlight is the only affordance needed.
+   ============================================================ */
+
+.boon-dialog-box {
+  max-width: 640px;
+}
+
+.boon-choices {
+  display: flex;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.boon-card {
+  flex: 1;
+  border: 1px solid var(--vein);
+  border-radius: 4px;
+  padding: 16px 14px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.boon-card:hover {
+  border-color: var(--gold);
+  transform: translateY(-2px);
+}
+
+.boon-card h3 {
+  margin: 0 0 6px;
+  font-family: 'Georgia', 'Iowan Old Style', serif;
+  font-weight: 400;
+  font-size: 1rem;
+  color: var(--paper);
+}
+
+.boon-card p {
+  margin: 0;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.76rem;
+  color: var(--paper-dim);
+}

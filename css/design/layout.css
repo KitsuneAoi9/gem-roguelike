@@ -1,0 +1,183 @@
+/* ============================================================
+   PAGE + BOARD LAYOUT
+   Colors here are structural (background, panels, borders) —
+   gem-specific colors live in css/model/gems.css instead.
+   ============================================================ */
+
+:root {
+  --rock: #211c1f;
+  --rock-deep: #171317;
+  --vein: #3a3138;
+  --paper: #ece4d8;
+  --paper-dim: #a89d8f;
+  --gold: #e0b34a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse at 20% -10%, #2c242a 0%, transparent 55%),
+    radial-gradient(ellipse at 80% 110%, #241f27 0%, transparent 55%),
+    var(--rock);
+  color: var(--paper);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 16px 48px;
+}
+
+/* Generic show/hide utility — reused for #start-screen and
+   #game-container, same "just toggle a class" convention main.js
+   already uses for the dialog overlays. */
+.hidden {
+  display: none !important;
+}
+
+/* ============================================================
+   START SCREEN
+   Shown on load and again after a loss; swapped out for
+   #game-container once the player clicks "Start Game".
+   ============================================================ */
+.start-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 48px;
+}
+
+.start-button {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 1rem;
+  letter-spacing: 0.03em;
+  background: none;
+  border: 1px solid var(--vein);
+  color: var(--paper);
+  padding: 14px 34px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.start-button:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+/* Wraps stats/board/message/reset. Needs its own flex column so the
+   pieces inside keep the same centered, stacked layout they had
+   before being grouped into this container. */
+#game-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.stats {
+  display: flex;
+  gap: 28px;
+  margin: 22px 0 18px;
+}
+
+/* 8x8 grid of fixed-size cells. If SIZE changes in board.js,
+   update the repeat(8, ...) count here to match. */
+#board {
+  display: grid;
+  grid-template-columns: repeat(8, 46px);
+  grid-template-rows: repeat(8, 46px);
+  gap: 4px;
+  background: var(--rock-deep);
+  padding: 10px;
+  border-radius: 6px;
+  box-shadow:
+    inset 0 0 0 1px var(--vein),
+    0 20px 40px -20px rgba(0,0,0,0.6);
+  position: relative;
+}
+
+.cell {
+  width: 46px;
+  height: 46px;
+  border-radius: 4px;
+  background: var(--vein);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.12s ease;
+}
+
+.cell--blocked {
+  background: var(--rock-deep);
+  cursor: default;
+  box-shadow: inset 0 0 0 1px var(--vein);
+}
+
+.cell--tile {
+  box-shadow: inset 0 0 0 2px var(--gold);
+}
+
+.tile-controls {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.tile-mode-buttons,
+.shape-picker {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.tile-mode-buttons button,
+.shape-picker button {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.75rem;
+  letter-spacing: 0.03em;
+  background: none;
+  border: 1px solid var(--vein);
+  color: var(--paper);
+  padding: 6px 14px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.tile-mode-buttons button:hover,
+.shape-picker button:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+/* Outline shown on the currently-selected cell, drawn inward so it
+   doesn't change the cell's box size. */
+.cell.selected {
+  outline: 2px solid var(--paper);
+  outline-offset: -2px;
+}
+
+button#reset {
+  margin-top: 18px;
+  background: none;
+  border: 1px solid var(--vein);
+  color: var(--paper);
+  padding: 8px 18px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+button#reset:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+
+

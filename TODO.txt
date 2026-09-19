@@ -1,0 +1,26 @@
+
+1. Rewrite the comment here
+
+/**
+ * Clears matched cells, lets gravity + refill run, and schedules the
+ * next cascade check. Split out from resolveMatches() so the
+ * level-up dialog can defer this step until the player is ready to
+ * continue, instead of it always firing on a timer.
+ *
+ * @param {boolean[][]} clearedCells - grid returned by findMatches() for
+ *   the match that was just resolved.
+ * @returns {void}
+ */
+function continueCascadeAfterMatch(clearedCells) {
+  setTimeout(() => {
+    clearedCells.forEach(([r, c]) => { grid[r][c] = -1; });
+    clearSpecialGems(clearedCells);
+    collapseAndFill(grid, [specialGemState.grid]);
+    renderBoard(boardEl, grid, onCellClick);
+    setTimeout(resolveMatches, CASCADE_CHECK_DELAY_MS);
+  }, MATCH_CLEAR_DELAY_MS);
+}
+
+2. Change the boonDefinitions to boon
+3. Change the specialGemDefinitions to specialGem
+4. Redo the Mark down

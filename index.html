@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>KitsuneAoi — a gem matching game</title>
+
+    <!-- Split CSS: model = per-gem visuals, design = page/board layout + fonts,
+     animation = selection + swap effects -->
+    <link rel="stylesheet" href="css/animation/select.css" />
+    <link rel="stylesheet" href="css/animation/swap.css" />
+    <link rel="stylesheet" href="css/design/layout.css" />
+    <link rel="stylesheet" href="css/design/typography.css" />
+    <link rel="stylesheet" href="css/design/dialog.css" />
+    <link rel="stylesheet" href="css/model/gems.css" />
+  </head>
+  <body>
+    <!-- Placeholder text below — main.js overwrites this on load from
+     resources/constants.js, so that file is the real source of truth. -->
+    <div class="masthead">
+      <h1>Seam</h1>
+      <p>trace three of a kind along the fault line</p>
+    </div>
+
+    <!-- Shown on load, and again whenever the player returns from a
+     lost run. Hidden as soon as "Start Game" is clicked. -->
+    <div id="start-screen" class="start-screen">
+      <button id="start-game" class="start-button">Start Game</button>
+    </div>
+
+    <!-- Everything the actual game needs on screen. Hidden until
+     "Start Game" is clicked; toggled off again on a loss. -->
+    <div id="game-container" class="hidden">
+      <div class="stats">
+        <div class="stat">
+          <div class="n" id="level">1</div>
+          <div class="l">LEVEL</div>
+        </div>
+        <div class="stat">
+          <div class="n" id="score">0</div>
+          <div class="l">SCORE</div>
+        </div>
+        <div class="stat">
+          <div class="n" id="moves">30</div>
+          <div class="l">MOVES LEFT</div>
+        </div>
+        <div class="stat">
+          <div class="n" id="target">0</div>
+          <div class="l">TARGET</div>
+        </div>
+      </div>
+
+      <div id="board"></div>
+      <div id="message">select a gem, then an adjacent one to swap</div>
+      <!-- Placeholder text below — main.js overwrites this on load from
+    resources/constant/constants.js (BUTTONS.RESET). -->
+      <button id="reset">start over</button>
+      <div id="tile-controls" class="tile-controls">
+        <div class="tile-mode-buttons">
+          <button id="construct-btn">Construct</button>
+          <button id="deconstruct-btn">Deconstruct</button>
+        </div>
+        <div id="shape-picker" class="shape-picker hidden">
+          <button class="shape-btn" data-shape="ONE_BY_ONE">1×1</button>
+          <button class="shape-btn" data-shape="TWO_BY_TWO">2×2</button>
+          <button class="shape-btn" data-shape="ONE_BY_THREE">1×3</button>
+          <button class="shape-btn" data-shape="TWO_BY_THREE">2×3</button>
+          <button id="cancel-placement-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Placeholder text below — main.js overwrites this on load from
+  resources/constant/text.js (DIALOG_TITLES.*, BUTTONS.*). -->
+    <div id="lose-dialog" class="dialog-overlay hidden">
+      <div class="dialog-box">
+        <h2 id="lose-title">Out of moves</h2>
+        <p id="lose-message"></p>
+        <button id="lose-restart">start over</button>
+      </div>
+    </div>
+
+    <div id="levelup-dialog" class="dialog-overlay hidden">
+      <div class="dialog-box">
+        <h2 id="levelup-title">Level Cleared!</h2>
+        <button id="levelup-next">Next Level</button>
+      </div>
+    </div>
+
+    <div id="boon-dialog" class="dialog-overlay hidden">
+      <div class="dialog-box boon-dialog-box">
+        <h2 id="boon-title">Choose a Boon</h2>
+        <div id="boon-choices" class="boon-choices"></div>
+      </div>
+    </div>
+    <script type="module" src="js/gameplay/main.js"></script>
+  </body>
+</html>
