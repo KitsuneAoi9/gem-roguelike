@@ -30,8 +30,9 @@ export const BOON_RARITY = {
 // a Luck stat — generateBoonOffer() (js/gameplay/boon.js) reads this
 // as-is; a Luck stat would shift these weights, not replace them.
 export const BOON_RARITY_WEIGHTS = {
-  [BOON_RARITY.COMMON]: 0.60,
-  [BOON_RARITY.RARE]: 0.28,
+  [BOON_RARITY.COMMON]: 0.50,
+  [BOON_RARITY.UNCOMMON]: 0.20,
+  [BOON_RARITY.RARE]: 0.18,
   [BOON_RARITY.EPIC]: 0.10,
   [BOON_RARITY.LEGENDARY]: 0.02,
 };
@@ -58,7 +59,7 @@ const GEM_ARCHETYPES = [
     type: BOON_TYPE.RISKY_BUFF,
     rarity: BOON_RARITY.RARE,
     maxOccurrences: null, // Unlimited
-    effect: { kind: 'frenzy', bonus: 100, penalty: -5 },
+    effect: { kind: 'frenzy', bonus: 100, penalty: -10 },
   },
   {
     idSuffix: 'bounty',
@@ -81,11 +82,11 @@ const GEM_ARCHETYPES = [
   {
     idSuffix: 'lust',
     nameSuffix: 'Lust',
-    description: (Gem) => `Increase the base score value of ${Gem} by +150, but decrease the base score value of non-${Gem} gems by -10.`,
-    type: BOON_TYPE.BUFF,
-    rarity: BOON_RARITY.COMMON,
+    description: (Gem) => `Increase the base score value of ${Gem} by +150, but decrease the base score value of non-${Gem} gems by -5.`,
+    type: BOON_TYPE.RISKY_BUFF,
+    rarity: BOON_RARITY.RARE,
     maxOccurrences: null,
-    effect: { kind: 'gem_score_lust', amount: 150, othersPenalty: -10 },
+    effect: { kind: 'gem_score_lust', amount: 150, othersPenalty: -5 },
   },
   {
     idSuffix: 'carat',

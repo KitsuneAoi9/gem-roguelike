@@ -37,7 +37,7 @@ export const LEVEL_UP_BONUS_MOVES = 10; // extra moves granted each time a level
 // a flag rather than removed logic so it can be toggled off later
 // (e.g. a "hard mode" that allows real deadlocks) without having to
 // rebuild the reshuffle logic from scratch.
-export const PREVENT_DEADLOCK = true;
+export const PREVENT_DEADLOCK = false;
 
 // --- moves-left mechanic (shelved for now) ---
 export const ENABLE_MOVES_LIMIT = false;

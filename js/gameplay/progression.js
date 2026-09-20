@@ -13,16 +13,39 @@ import { boonEffectState } from '../resources/boon/boon_effect_state.js';
 
 /**
  * Score needed to clear a given level.
- * Placeholder curve: ~25% growth per level, rounded to the nearest
- * 50 so the number reads as intentional rather than a raw decimal.
+ *
+ * UPDATED THIS ROUND — no longer cumulative (previous-target-based).
+ * Now a direct, standalone formula per level:
+ *
+ *   target(level) = ROUND(2000 x 1.35^(level-1)) x level
+ *                    + 500 x 1.5^level
+ *
+ * Only the FIRST term is rounded before the x level multiply — same
+ * "round early" behavior as the last formula. The second term
+ * (500 x 1.5^level) is NOT separately rounded; the whole expression
+ * is rounded once at the very end (see the final Math.round() below),
+ * per how the formula was given.
+ *
+ * Since this no longer depends on target(level-1), it's back to a
+ * single direct calculation — no loop needed. Still a PURE function
+ * of `level`, so resetProgression()/advanceLevel() can jump to any
+ * level and get the right answer with no dependency on having
+ * calculated any other level first.
+ *
+ * The global targetScoreMultiplier (Gemstone Gamble / Trinket Wager /
+ * Gem Greed / Jewel Avarice) is still applied to the WHOLE result,
+ * same as every prior version of this formula.
  *
  * @param {number} level - 1-based level number.
  * @returns {number} score target for that level.
  */
 export function calculateScoreTarget(level) {
-  const raw = 500 * Math.pow(1.25, level - 1);
-  const rounded = Math.round(raw / 50) * 50;
-  return Math.round(rounded * boonEffectState.targetScoreMultiplier);
+  if ( level <= 1) return 2000; // level 1 is always 2000, no multiplier applied yet
+
+  const scaledTerm = Math.round(2000 * Math.pow(1.35, level - 1)) * level;
+  const flatGrowthTerm = 500 * Math.pow(1.5, level);
+  const raw = scaledTerm + flatGrowthTerm;
+  return Math.round(raw * boonEffectState.targetScoreMultiplier);
 }
 
 /**

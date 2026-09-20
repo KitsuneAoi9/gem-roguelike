@@ -37,7 +37,9 @@ import { progressionState } from '../resources/progression/progression.js';
 import { resetProgression, advanceLevel } from './progression.js';
 import { resetBoons, generateBoonOffer, pickBoon } from './boon.js';
 import { applyBoonEffect, resetBoonEffects } from './boon_effects.js';
-import { TILE_SHAPES } from '../resources/constant/constants.js';
+import { TILE_SHAPES, GEM_DEFINITIONS } from '../resources/constant/constants.js';
+import { getGemBaseScore, getGemBaseMultiplier } from './gem_base.js';
+import { boonEffectState } from '../resources/boon/boon_effect_state.js';
 
 import { SPECIAL_GEM_TYPE } from '../resources/special%20gem/special_gem.js';
 import { specialGemState } from '../resources/special%20gem/special_gem_state.js';
@@ -72,6 +74,13 @@ const levelUpNextBtn  = document.getElementById('levelup-next');
 const boonDialogEl    = document.getElementById('boon-dialog');
 const boonTitleEl     = document.getElementById('boon-title');
 const boonChoicesEl   = document.getElementById('boon-choices');
+const globalMultiplierEl = document.getElementById('global-multiplier');
+const globalBonusEl      = document.getElementById('global-bonus');
+const gemStatsListEl     = document.getElementById('gem-stats-list');
+
+// NEW — the whole "MOVES LEFT" stat block, so it can be hidden
+// entirely when ENABLE_MOVES_LIMIT is off (constants.js).
+const movesStatEl = document.getElementById('moves-stat');
 
 // --- mutable game state ---
 let grid;
@@ -116,6 +125,69 @@ function applyStaticText() {
   loseTitleEl.textContent = DIALOG_TITLES.LOSE;
   levelUpTitleEl.textContent = DIALOG_TITLES.LEVEL_UP;
   boonTitleEl.textContent = DIALOG_TITLES.BOON;
+}
+
+/**
+ * Hides the "MOVES LEFT" stat block entirely when the moves-limit
+ * mechanic is shelved (ENABLE_MOVES_LIMIT === false in constants.js).
+ * Called once on page load, not per-run — this is a feature flag,
+ * not game state, so it never needs to toggle mid-session.
+ *
+ * @returns {void}
+ */
+function applyMovesLimitVisibility() {
+  if (!ENABLE_MOVES_LIMIT) {
+    movesStatEl.classList.add('hidden');
+  }
+}
+
+/**
+ * Renders the left-side stats panel: each active gem's current
+ * matching bonus (its Affinity total), base score, and base
+ * multiplier, plus the two global boon totals.
+ *
+ * The ONLY things that can change any of these numbers are boon
+ * picks (Affinity/Bounty/Brilliance/Lust/Carat/Enthusiast/Addict/
+ * Maniac/Fanatic, and the 4 global boons) — so this only needs to run
+ * once in init() and again right after applyBoonEffect(), not on
+ * every score change.
+ *
+ * Only the 7 ACTIVE gems are shown (GEM_DEFINITIONS) — the 4
+ * locked/future gems (Onyx etc.) can still quietly accumulate Lust/
+ * Maniac penalties in gemBaseState, but showing that here would just
+ * be confusing before they're actually unlockable.
+ *
+ * @returns {void}
+ */
+function renderSideStats() {
+  globalMultiplierEl.textContent = `${boonEffectState.globalScoreMultiplier.toFixed(2)}x`;
+  globalBonusEl.textContent = signed(boonEffectState.globalScoreBonus);
+
+  // Rebuilt from scratch every call — cheap at 7 rows, and much
+  // simpler than diffing individual rows in place.
+  gemStatsListEl.innerHTML = '';
+
+  GEM_DEFINITIONS.forEach(({ id, name }) => {
+    const baseScore = getGemBaseScore(id);
+    const baseMultiplier = getGemBaseMultiplier(id);
+    // "current matching bonus score" == this gem's flat Affinity
+    // total. Frenzy is deliberately left out — it's a bonus/penalty
+    // PAIR rather than one flat number, so it doesn't collapse into
+    // a single figure the way Affinity does.
+    const matchBonus = boonEffectState.affinityBonus[id] || 0;
+
+    const row = document.createElement('div');
+    row.className = 'gem-stat-row';
+    row.innerHTML = `
+      <div class="gem-stat-name">${name}</div>
+      <div class="gem-stat-values">
+        <span>base ${baseScore}</span>
+        <span>x${baseMultiplier.toFixed(2)}</span>
+        <span class="gem-stat-bonus">match ${signed(matchBonus)}</span>
+      </div>
+    `;
+    gemStatsListEl.appendChild(row);
+  });
 }
 
 /**
@@ -190,6 +262,11 @@ function init() {
   levelUpDialogEl.classList.add('hidden');
   boonDialogEl.classList.add('hidden');
 
+  loseDialogEl.classList.add('hidden');
+  levelUpDialogEl.classList.add('hidden');
+  boonDialogEl.classList.add('hidden');
+
+  renderSideStats(); // reflect the freshly-reset boon/gem state
   renderBoard(boardEl, grid, onCellClick);
 }
 
@@ -412,12 +489,20 @@ function startTilePlacement(def, onContinue) {
 /**
  * Moves to the next queued placement phase. Once the queue is empty —
  * every phase of this boon has been placed — reshuffles the board
- * (every non-blocked cell gets a fresh gem type; every special gem
- * stays exactly where it is, since rebuildGridRespectingBlocked()
- * only touches the base grid, never specialGemState) and hands
- * control back to whatever was waiting on the whole boon to finish.
- * No score is awarded here — this is purely "the board just changed
- * shape, refresh its contents," same spirit as the deadlock reshuffle.
+ * and hands control back to whatever was waiting on the whole boon
+ * to finish.
+ *
+ * BUGFIX: `busy` used to stay `true` the whole way through placement
+ * (it's set `true` at the start of every swap and normally only
+ * cleared once a cascade finds no more matches — but a board-shape
+ * boon detours AROUND that cascade-resolution path entirely). Since
+ * onCellClick()'s first line is `if (busy) return;`, every placement
+ * click was being silently swallowed before it ever reached
+ * handlePlacementClick() — ghost cells rendered fine, but clicking
+ * one did nothing. Fixed by releasing `busy` for the duration of each
+ * phase (so clicks are actually processed) and reclaiming it the
+ * moment the whole boon is placed (so the resumed cascade still
+ * blocks input exactly like it always has).
  *
  * @returns {void}
  */
@@ -431,6 +516,12 @@ function advanceTilePlacement() {
     placementMode = null;
     placementShape = null;
     messageEl.textContent = MESSAGES.SELECT_PROMPT;
+
+    // Placement is fully done — we're handing off into the resumed
+    // cascade (continueCascadeAfterMatch), which assumes `busy` is
+    // `true` for the whole time it's running, same as a normal swap.
+    busy = true;
+
     if (finish) finish();
     return;
   }
@@ -439,12 +530,12 @@ function advanceTilePlacement() {
   placementMode = phase.action;   // 'expand' | 'shrink'
   placementShape = phase.shape;
 
+  // Let the player actually click a placement cell — see the bugfix
+  // note above for why this line has to be here.
+  busy = false;
+
   if (placementMode === 'expand') {
-    // Interpolates the shape's label, so this stays a template
-    // literal here rather than moving into text.js (Rule 7).
     messageEl.textContent = `click a highlighted cell to grow your board with a ${TILE_SHAPES[placementShape].label} tile`;
-    // Only ghost cells are clickable-looking during an expand — every
-    // other BLOCKED cell stays plain grey, same as always.
     renderBoard(boardEl, grid, onCellClick, { ghostCells: getExpandableCells(grid) });
   } else {
     messageEl.textContent = `click the top-left of a ${TILE_SHAPES[placementShape].label} area to remove from your board`;
@@ -795,7 +886,8 @@ function showBoonDialog(onContinue) {
     card.innerHTML = `<h3>${def.name}</h3><p>${def.description}</p>`;
     card.addEventListener('click', () => {
       pickBoon(def.id);
-      applyBoonEffect(def);            // keep whatever your actual line does here
+      applyBoonEffect(def); // keep whatever your actual line does here
+      renderSideStats();    // this pick may have changed a gem's base value/multiplier, its Affinity total, or a global boon total
       boonDialogEl.classList.add('hidden');
 
       const isBoardShapeBoon =
@@ -888,4 +980,5 @@ levelUpNextBtn.addEventListener('click', () => {
 });
 
 applyStaticText();
+applyMovesLimitVisibility(); 
 showStartScreen();

@@ -215,4 +215,98 @@ button#reset:hover {
   transform: translateX(-50%) translateY(-4px);
 }
 
+/* ============================================================
+   SIDE STATS PANEL
+   Fixed to the left edge of the viewport, independent of the main
+   centered flex-column layout — this way it never fights
+   .masthead/#game-container/#board for space. Only ever populated by
+   main.js's renderSideStats(); this file just defines the look.
+   ============================================================ */
+.side-stats {
+  position: fixed;
+  top: 32px;
+  left: 20px;
+  width: 200px;
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  background: var(--rock);
+  border: 1px solid var(--vein);
+  border-radius: 6px;
+  padding: 14px 16px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  box-shadow: 0 20px 40px -20px rgba(0,0,0,0.6);
+}
+
+.side-stats h2 {
+  margin: 0 0 10px;
+  font-family: 'Georgia', 'Iowan Old Style', serif;
+  font-weight: 400;
+  font-size: 1rem;
+  color: var(--paper);
+  text-align: center;
+}
+
+.side-stats-global {
+  border-bottom: 1px solid var(--vein);
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+}
+
+.side-stat-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--paper-dim);
+  padding: 2px 0;
+}
+
+.side-stat-row .side-stat-value {
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+
+.gem-stats-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gem-stat-row {
+  border-bottom: 1px solid var(--vein);
+  padding-bottom: 6px;
+}
+
+.gem-stat-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.gem-stat-name {
+  font-size: 0.8rem;
+  color: var(--paper);
+  margin-bottom: 3px;
+}
+
+.gem-stat-values {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--paper-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.gem-stat-values .gem-stat-bonus {
+  color: var(--gold);
+}
+
+/* Small screens: the fixed panel would overlap the centered board —
+   stack it above instead of overlapping. */
+@media (max-width: 900px) {
+  .side-stats {
+    position: static;
+    width: auto;
+    max-width: 420px;
+    margin: 0 auto 20px;
+  }
+}
 

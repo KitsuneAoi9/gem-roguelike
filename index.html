@@ -14,6 +14,27 @@
     <link rel="stylesheet" href="css/model/gems.css" />
   </head>
   <body>
+    <!-- Side stats panel — fixed to the left edge of the viewport, so it
+     doesn't disturb the existing centered flex-column layout used by
+     everything else. Populated by main.js's renderSideStats(), which
+     only needs to run on init() and again right after a boon is
+     applied — those are the only two things that can change any
+     number shown here. -->
+    <div id="side-stats" class="side-stats">
+      <h2>Gem Stats</h2>
+
+      <div class="side-stats-global">
+        <div class="side-stat-row">
+          <span class="side-stat-label">Global Multiplier</span>
+          <span class="side-stat-value" id="global-multiplier">1.00x</span>
+        </div>
+        <div class="side-stat-row">
+          <span class="side-stat-label">Global Bonus</span>
+          <span class="side-stat-value" id="global-bonus">+0</span>
+        </div>
+      </div>
+      <div id="gem-stats-list" class="gem-stats-list"></div>
+    </div>
     <!-- Placeholder text below — main.js overwrites this on load from
      resources/constants.js, so that file is the real source of truth. -->
     <div class="masthead">
@@ -39,7 +60,7 @@
           <div class="n" id="score">0</div>
           <div class="l">SCORE</div>
         </div>
-        <div class="stat">
+        <div class="stat" id="moves-stat">
           <div class="n" id="moves">30</div>
           <div class="l">MOVES LEFT</div>
         </div>
