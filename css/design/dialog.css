@@ -129,8 +129,74 @@
 }
 
 .boon-card-gem-icon {
-  width: 22px;
-  height: 22px;
+  width: 25px;
+  height: 25px;
   flex-shrink: 0;
   object-fit: contain;
+}
+
+/* ============================================================
+   SHOP DIALOG
+   Extends the base .dialog-box look for the boon-shop's offer.
+   Unlike the free boon-pick dialog, a card here can be bought
+   MULTIPLE times in one visit (any offered boon, as affordable) —
+   closing only happens via the explicit Leave button. main.js's
+   renderShopDialog() toggles .shop-card--bought/--unaffordable per
+   card, on every render.
+   ============================================================ */
+
+.shop-dialog-box {
+  max-width: 900px;
+}
+
+.shop-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.shop-card {
+  flex: 1 1 160px;
+  border: 1px solid var(--vein);
+  border-radius: 4px;
+  padding: 14px 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+}
+
+.shop-card:hover {
+  border-color: var(--gold);
+  transform: translateY(-2px);
+}
+
+.shop-card-price {
+  margin-top: 8px;
+  font-size: 0.78rem;
+  color: var(--gold);
+  font-weight: 600;
+}
+
+/* Already bought this visit — inert, dimmed, no hover lift. */
+.shop-card--bought {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.shop-card--bought:hover {
+  border-color: var(--vein);
+  transform: none;
+}
+
+/* Too expensive right now — same inert treatment, slightly less
+   dimmed than "bought" so the two read differently at a glance. */
+.shop-card--unaffordable {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.shop-card--unaffordable:hover {
+  border-color: var(--vein);
+  transform: none;
 }

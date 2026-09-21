@@ -79,6 +79,27 @@ export function generateBoonOffer(count = 3) {
 }
 
 /**
+ * Equal-weight offer generation — every currently-available boon
+ * (same isBoonAvailable() gate as generateBoonOffer(): respects
+ * maxOccurrences AND gem-unlock status) has the same chance of being
+ * picked, regardless of rarity. Used by the shop instead of
+ * generateBoonOffer()'s rarity-weighted roll — kept as its own
+ * function (rather than a flag on generateBoonOffer()) specifically
+ * so the shop's selection strategy can change independently later
+ * without touching the level-up dialog's.
+ *
+ * @param {number} [count=5]
+ * @param {(def: object) => boolean} [extraFilter] - an additional
+ *   predicate applied on top of isBoonAvailable() — the shop uses
+ *   this to exclude board-shape boons (see boon_shop.js).
+ * @returns {object[]}
+ */
+export function generateEqualWeightBoonOffer(count = 5, extraFilter = () => true) {
+  const available = BOON_POOL.filter(isBoonAvailable).filter(extraFilter);
+  return shuffle(available).slice(0, count);
+}
+
+/**
  * Records the player's pick in boonState. Does NOT apply the boon's
  * effect — see js/gameplay/boon_effects.js's applyBoonEffect(), called
  * separately by main.js right after this.

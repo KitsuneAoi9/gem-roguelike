@@ -14,36 +14,35 @@ import { boonEffectState } from '../resources/boon/boon_effect_state.js';
 /**
  * Score needed to clear a given level.
  *
- * UPDATED THIS ROUND — no longer cumulative (previous-target-based).
- * Now a direct, standalone formula per level:
+ * UPDATED THIS ROUND — new formula per the latest design sheet:
  *
- *   target(level) = ROUND(2000 x 1.25^(level-1)) x level
- *                    + 500 x 1.5^level
+ *   target(level) = ROUND(1000 x 1.15^(level-1)) x level
+ *                    + 500 x 1.05^level
  *
- * Only the FIRST term is rounded before the x level multiply — same
- * "round early" behavior as the last formula. The second term
- * (500 x 1.5^level) is NOT separately rounded; the whole expression
- * is rounded once at the very end (see the final Math.round() below),
- * per how the formula was given.
+ * Only the FIRST term is rounded before its `x level` multiply — same
+ * "round early" convention as the prior formula. The second term
+ * (500 x 1.05^level) is not separately rounded; the whole expression
+ * is rounded once at the very end.
  *
- * Since this no longer depends on target(level-1), it's back to a
- * single direct calculation — no loop needed. Still a PURE function
- * of `level`, so resetProgression()/advanceLevel() can jump to any
- * level and get the right answer with no dependency on having
- * calculated any other level first.
+ * NOTE — this replaces the old special-cased "level 1 is always a
+ * flat 2000, no formula" branch. The new formula is well-defined at
+ * level 1 on its own (1000 x 1.15^0 x 1 + 500 x 1.05^1 = 1525), so
+ * that hardcoded early-return has been removed — don't reintroduce
+ * it, or level 1 will silently disagree with every other level's
+ * curve.
  *
- * The global targetScoreMultiplier (Gemstone Gamble / Trinket Wager /
- * Gem Greed / Jewel Avarice) is still applied to the WHOLE result,
- * same as every prior version of this formula.
+ * Still a PURE function of `level` alone — resetProgression()/
+ * advanceLevel() can jump to any level with no dependency on having
+ * calculated any other level first. The global targetScoreMultiplier
+ * (Gemstone Gamble / Trinket Wager / Gem Greed / Jewel Avarice) is
+ * still applied to the WHOLE result, same as before.
  *
  * @param {number} level - 1-based level number.
  * @returns {number} score target for that level.
  */
 export function calculateScoreTarget(level) {
-  if ( level <= 1) return 2000; // level 1 is always 2000, no multiplier applied yet
-
-  const scaledTerm = Math.round(2000 * Math.pow(1.25, level - 1)) * level;
-  const flatGrowthTerm = 500 * Math.pow(1.5, level);
+  const scaledTerm = Math.round(1000 * Math.pow(1.15, level - 1)) * level;
+  const flatGrowthTerm = 500 * Math.pow(1.05, level);
   const raw = scaledTerm + flatGrowthTerm;
   return Math.round(raw * boonEffectState.targetScoreMultiplier);
 }

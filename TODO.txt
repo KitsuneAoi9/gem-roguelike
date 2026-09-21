@@ -7,7 +7,7 @@
 
 4. Level one target score to be 2000.  (Done and Tested)
 
-5. Special gems calculation double check.
+5. Special gems calculation double check. (Done?)
 
 
 
@@ -16,11 +16,7 @@
 
 
 7. Hint (Done and Tested)
-8. Bombs special gems (Done)
-
-
-
-
+8. Bombs special gems (Done and tested)
 
 
 9. You gain gold by buying using score (score scaling) or sacrifice a boon (set amount of gold, gold gained will be based on rarirty).
@@ -30,3 +26,8 @@
 13. Curse that spawns dead block (1 deadblocks, immediately) showing up or new gems (like only 5% for appearance) to mess with the board. dead block can only be remove by moving it to the bottom.
 14. Add a version
 15. Gamble boon, double or nothing. Either repeatedly or one chance
+
+
+
+
+16. Star is still being treated as gems.

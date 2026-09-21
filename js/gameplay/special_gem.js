@@ -14,9 +14,10 @@
 //
 // RENAMED/REWORKED THIS ROUND — Star -> Discharger (see the resource
 // file's header for the full behavior rundown). Mechanically:
-//   - dischargerBlastCells() is NEW — the 3x3-centered-on-itself
-//     blast used when a Discharger is cleared via a normal match or
-//     a chain-reaction (resolveSpecialGems()'s dispatch below).
+//   - dischargerBlastCells() is NEW — a diamond-shaped blast (every
+//     cell within Manhattan distance 2 of itself — |dRow|+|dCol| <= 2)
+//     used when a Discharger is cleared via a normal match or a
+//     chain-reaction (resolveSpecialGems()'s dispatch below).
 //   - radialBurstCells() is the OLD starBlastCells() renamed — same
 //     row+column+diagonals shape, just no longer the passive on-match
 //     effect. Now only used by triggerDischargerDouble() below.
@@ -130,14 +131,23 @@ function radialBurstCells(row, col) {
 }
 
 /**
- * NEW — every cell a Discharger clears in addition to itself: the
- * 3x3 block centered on it (the "2,2 position" in a 1-indexed 3x3
- * grid — i.e. dead center). This is now the Discharger's PASSIVE
- * on-match effect (a normal match, or a chain-reaction blast, hitting
- * its cell) — see resolveSpecialGems()'s dispatch below. The old
- * row+column+diagonals burst (radialBurstCells()) moved to being the
- * Discharger+Discharger SWAP combo instead — see
- * triggerDischargerDouble().
+ * NEW — every cell a Discharger clears in addition to itself: a
+ * DIAMOND shape (every cell within Manhattan distance 2 — i.e.
+ * |dRow| + |dCol| <= 2), not the old plain 3x3 square. Drawn out,
+ * it looks like:
+ *
+ *     X
+ *   X X X
+ * X X X X X
+ *   X X X
+ *     X
+ *
+ * This is the Discharger's PASSIVE on-match effect (a normal match,
+ * or a chain-reaction blast, hitting its cell) — see
+ * resolveSpecialGems()'s dispatch below. Also reused as-is by
+ * triggerHyperstarDischargerCombo() below (each converted-and-
+ * detonated Discharger uses this exact same shape), so there's still
+ * only ONE place that defines "what a Discharger's blast looks like."
  *
  * @param {number} row
  * @param {number} col
@@ -145,13 +155,57 @@ function radialBurstCells(row, col) {
  */
 function dischargerBlastCells(row, col) {
   const cells = [];
-  for (let dr = -1; dr <= 1; dr++) {
-    for (let dc = -1; dc <= 1; dc++) {
+  // Walk the diamond's 5x5 bounding box, then drop anything outside
+  // Manhattan distance 2 — simpler than hand-listing each of the 12
+  // ring cells individually, and the radius is a one-number tweak
+  // here if the design ever wants a bigger/smaller diamond later.
+  for (let dr = -2; dr <= 2; dr++) {
+    for (let dc = -2; dc <= 2; dc++) {
       if (dr === 0 && dc === 0) continue; // itself — the caller clears that separately
+      if (Math.abs(dr) + Math.abs(dc) > 2) continue; // outside the diamond's radius — skip
       if (inBounds(row + dr, col + dc)) cells.push([row + dr, col + dc]);
     }
   }
   return cells;
+}
+
+/**
+ * NEW — picks which cell within a matched group a spawned special
+ * gem should appear at, preferring one of the two cells the player
+ * just swapped over the old fixed middle/intersection rule.
+ *
+ * If BOTH swapped cells land inside the SAME group (one swap can
+ * simultaneously complete two intersecting runs), the DESTINATION
+ * cell (`to`) wins — "where the gem the player moved actually ended
+ * up" reads as the more natural spawn point than where it came from.
+ * If only one swapped cell is in this group, that one is used
+ * regardless of which side it was. If NEITHER swapped cell is in
+ * this group — a cascade step with no swap at all, which is the
+ * common case for every link after the first — this falls back to
+ * `fallbackFn`, exactly like every prior round's behavior.
+ *
+ * @param {[number, number][]} cells - the matched group's cells.
+ * @param {[[number, number], [number, number]] | null} swapCells -
+ *   `[[fromRow, fromCol], [toRow, toCol]]`, or null if this step has
+ *   no associated swap.
+ * @param {(cells: [number, number][]) => [number, number]} fallbackFn -
+ *   `middleCell` for a straight run, `intersectionCell` for an L/T
+ *   shape — whichever the caller already uses for that shape.
+ * @returns {[number, number]}
+ */
+function pickSpawnCell(cells, swapCells, fallbackFn) {
+  if (swapCells) {
+    const [[fromRow, fromCol], [toRow, toCol]] = swapCells;
+    const cellKeys = new Set(cells.map(([r, c]) => `${r},${c}`));
+    const toInGroup = cellKeys.has(`${toRow},${toCol}`);
+    const fromInGroup = cellKeys.has(`${fromRow},${fromCol}`);
+
+    if (toInGroup) return [toRow, toCol];
+    if (fromInGroup) return [fromRow, fromCol];
+  }
+  // No swap this step, or neither swapped cell ended up in THIS
+  // particular group — fall back to the original placement rule.
+  return fallbackFn(cells);
 }
 
 /**
@@ -162,14 +216,18 @@ function dischargerBlastCells(row, col) {
  * if the run lies along a single row (horizontal), Column if it lies
  * along a single column (vertical). A straight-line group of 5+
  * spawns a Hyperspace Star. A non-straight group of 4+ (an L or T
- * shape) spawns a Discharger (renamed from Star this round — same
- * trigger condition, its ACTIVATION behavior changed, see file
- * header). Plain 3-matches still spawn nothing.
+ * shape) spawns a Discharger. Plain 3-matches still spawn nothing.
+ *
+ * NEW — spawn POSITION now prefers wherever the player's swap landed
+ * (see pickSpawnCell() above), falling back to the old fixed
+ * middle/intersection rule whenever this group has no associated
+ * swap (every cascade link past the first).
  *
  * @param {{gemType: number, cells: [number, number][]}} group
+ * @param {[[number, number], [number, number]] | null} swapCells
  * @returns {{type: string, row: number, col: number} | null}
  */
-function classifyGroup(group) {
+function classifyGroup(group, swapCells) {
   const { cells } = group;
   if (cells.length < 4) return null;
 
@@ -177,7 +235,7 @@ function classifyGroup(group) {
 
   if (straight) {
     const isHorizontalRun = cells.every(([r]) => r === cells[0][0]);
-    const [row, col] = middleCell(cells);
+    const [row, col] = pickSpawnCell(cells, swapCells, middleCell);
 
     if (cells.length === 4) {
       return {
@@ -191,19 +249,21 @@ function classifyGroup(group) {
     return { type: SPECIAL_GEM_TYPE.HYPERSTAR, row, col };
   }
 
-  // Non-straight (L/T shape) group of 4+ -> Discharger (was Star).
-  const [row, col] = intersectionCell(cells);
+  // Non-straight (L/T shape) group of 4+ -> Discharger.
+  const [row, col] = pickSpawnCell(cells, swapCells, intersectionCell);
   return { type: SPECIAL_GEM_TYPE.DISCHARGER, row, col };
 }
 
 /**
  * Resolves one round of matches: spawn decisions, chain-reaction
- * expansion, and a scoring breakdown — which cleared cells came from
- * a formed match (matchedGroups) vs. a chain-reaction blast
- * (incidentalCells) — so score.js can score them differently.
+ * expansion, and a scoring breakdown.
  *
  * @param {number[][]} grid
  * @param {boolean[][]} matched
+ * @param {[[number, number], [number, number]] | null} [swapCells] -
+ *   passed straight through to classifyGroup() — see its doc comment
+ *   and main.js's resolveMatches() for the "only non-null on the
+ *   very first post-swap step" rule.
  * @returns {{
  *   clearedCells: [number, number][],
  *   spawns: {type: string, row: number, col: number}[],
@@ -211,7 +271,7 @@ function classifyGroup(group) {
  *   incidentalCells: { gemType: number, row: number, col: number }[],
  * }}
  */
-export function resolveSpecialGems(grid, matched) {
+export function resolveSpecialGems(grid, matched, swapCells = null) {
   const groups = findMatchGroups(grid, matched);
 
   const clearedKeys = new Set();
@@ -221,14 +281,12 @@ export function resolveSpecialGems(grid, matched) {
     }
   }
 
-  // snapshot BEFORE blast expansion — everything in here was part of
-  // a formed match this pass; scoring uses this to spot incidental cells
   const originalMatchedKeys = new Set(clearedKeys);
 
   const spawns = [];
   const spawnKeys = new Set();
   for (const group of groups) {
-    const spawn = classifyGroup(group);
+    const spawn = classifyGroup(group, swapCells); // <-- only this line changed
     if (!spawn) continue;
     const key = `${spawn.row},${spawn.col}`;
     if (spawnKeys.has(key)) continue;

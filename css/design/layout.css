@@ -85,11 +85,11 @@ body {
    update the repeat(8, ...) count here to match. */
 #board {
   display: grid;
-  grid-template-columns: repeat(8, 46px);
-  grid-template-rows: repeat(8, 46px);
-  gap: 4px;
+  grid-template-columns: repeat(8, 69px);
+  grid-template-rows: repeat(8, 69px);
+  gap: 6px;
   background: var(--rock-deep);
-  padding: 10px;
+  padding: 15px;
   border-radius: 6px;
   box-shadow:
     inset 0 0 0 1px var(--vein),
@@ -98,8 +98,8 @@ body {
 }
 
 .cell {
-  width: 46px;
-  height: 46px;
+  width: 69px;
+  height: 69px;
   border-radius: 4px;
   background: var(--vein);
   display: flex;
@@ -114,25 +114,6 @@ body {
      swapping. */
   touch-action: none;
   user-select: none;
-}
-
-/* #board's repeat(8, 46px) below is now only a fallback for the very
-   first paint before any JS has run — render.js sets
-   gridTemplateColumns/Rows inline on every renderBoard() call once
-   the board can be wider/taller than 8x8. If SIZE ever changes in
-   board.js, you do NOT need to touch this number anymore. */
-#board {
-  display: grid;
-  grid-template-columns: repeat(8, 46px);
-  grid-template-rows: repeat(8, 46px);
-  gap: 4px;
-  background: var(--rock-deep);
-  padding: 10px;
-  border-radius: 6px;
-  box-shadow:
-    inset 0 0 0 1px var(--vein),
-    0 20px 40px -20px rgba(0,0,0,0.6);
-  position: relative;
 }
 
 .cell--blocked {
@@ -318,9 +299,39 @@ button#reset:hover {
   color: var(--gold);
 }
 
+/* NEW — colors a side-stat value relative to its own no-boon
+   default: green once a boon has pushed it above that default, red
+   once a boon has pulled it below. Applied by main.js's
+   statDiffClass(). The plain single-class rules cover the base-score
+   and base-multiplier spans (which have no color of their own, so
+   they just inherit .gem-stat-values's color normally). The combined
+   selectors below exist purely for CSS specificity: .side-stat-value
+   and .gem-stat-bonus each set `color` directly on the SAME element
+   these classes land on, so a bare .gem-stat-boosted/.gem-stat-penalized
+   alone isn't specific enough to win against them — without the
+   combined selectors, match/global stats would stay gold no matter
+   which class got added. */
+.gem-stat-boosted {
+  color: #5fbf6f;
+}
+
+.gem-stat-penalized {
+  color: #d9695a;
+}
+
+.side-stat-row .side-stat-value.gem-stat-boosted,
+.gem-stat-values .gem-stat-bonus.gem-stat-boosted {
+  color: #5fbf6f;
+}
+
+.side-stat-row .side-stat-value.gem-stat-penalized,
+.gem-stat-values .gem-stat-bonus.gem-stat-penalized {
+  color: #d9695a;
+}
+
 .gem-stat-icon {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   vertical-align: -2px; /* nudges it to sit on the same baseline as the text next to it */
   margin-right: 3px;
   object-fit: contain;
@@ -336,4 +347,116 @@ button#reset:hover {
     margin: 0 auto 20px;
   }
 }
+/* ============================================================
+   HISTORY PANEL
+   Fixed to the RIGHT edge of the viewport — mirrors .side-stats on
+   the left, same reasoning: independent of the main centered
+   flex-column layout so it never fights .masthead/#game-container/
+   #board for space. Only ever populated by main.js's
+   renderHistoryPanel(); this file just defines the look.
+   ============================================================ */
+.history-panel {
+  position: fixed;
+  top: 32px;
+  right: 20px;
+  width: 240px;
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  background: var(--rock);
+  border: 1px solid var(--vein);
+  border-radius: 6px;
+  padding: 14px 16px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  box-shadow: 0 20px 40px -20px rgba(0,0,0,0.6);
+}
 
+.history-panel h2 {
+  margin: 0 0 10px;
+  font-family: 'Georgia', 'Iowan Old Style', serif;
+  font-weight: 400;
+  font-size: 1rem;
+  color: var(--paper);
+  text-align: center;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.history-entry {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--paper-dim);
+  border-bottom: 1px solid var(--vein);
+  padding-bottom: 5px;
+}
+
+.history-entry:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+/* Reuses the exact same green/red as the side-stats boosted/penalized
+   colors — same visual language ("good for the player" vs. "bad for
+   the player") applied to a different panel. */
+.history-entry--positive {
+  color: #5fbf6f;
+}
+
+.history-entry--negative {
+  color: #d9695a;
+}
+
+/* NEW — level-clear lines get their own gold color/weight, distinct
+   from a plain positive score line, so a level-up stands out at a
+   glance in a fast-scrolling log. */
+.history-entry--levelup {
+  color: var(--gold);
+  font-weight: 600;
+}
+
+/* NEW — every boon-pick line (free from the level-up dialog OR
+   bought from the shop) gets this same violet, regardless of
+   buff/curse — the description text already conveys that; the color
+   now just marks "this line is a boon pick." */
+.history-entry--boon {
+  color: #b892f0;
+}
+
+/* 'neutral' intentionally has no rule here — it just inherits
+   .history-entry's own paper-dim color. Kept as a valid tone value
+   (see history.js's addHistoryEntry() doc comment) for things like a
+   Frenzy pick that are neither a pure upside nor a pure downside. */
+
+/* Small screens: same treatment as .side-stats — stack above the
+   board instead of overlapping it. */
+@media (max-width: 900px) {
+  .history-panel {
+    position: static;
+    width: auto;
+    max-width: 420px;
+    margin: 0 auto 20px;
+  }
+}
+
+/* ============================================================
+   VERSION TAG
+   Fixed to the bottom-right corner. Sits BELOW modal dialogs
+   (z-index 10 there vs. 5 here) so an open dialog fully covers it —
+   fine, it's not critical info. Text only, set once on load by
+   main.js's applyStaticText() from text.js's GAME_VERSION — never
+   updated again during play.
+   ============================================================ */
+.version-tag {
+  position: fixed;
+  bottom: 10px;
+  right: 14px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.9rem;
+  color: var(--paper-dim);
+  opacity: 0.6;
+  pointer-events: none;
+  z-index: 5;
+}

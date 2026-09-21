@@ -60,7 +60,7 @@ export const SPECIAL_GEM_INFO = {
   },
   [SPECIAL_GEM_TYPE.DISCHARGER]: {
     name: 'Discharger',
-    description: "Made from an L or T shape. Clears a 3x3 area centered on itself when matched. Swap with a Laser Beam to clear 3 rows or 3 columns (matching the laser's orientation) instead of a single row/column. Swap with another Discharger to clear a burst — row, column, and both diagonals. Swap with a Hyperspace Star to convert every gem of its color into a Discharger and detonate them all.",
+    description: "Made from an L or T shape. Clears a diamond-shaped burst (every cell within 2 tiles, counting only up/down/left/right moves) centered on itself when matched. Swap with a Laser Beam to clear 3 rows or 3 columns (matching the laser's orientation) instead of a single row/column. Swap with another Discharger to clear a burst — row, column, and both diagonals. Swap with a Hyperspace Star to convert every gem of its color into a Discharger and detonate them all.",
   },
   [SPECIAL_GEM_TYPE.HYPERSTAR]: {
     name: 'Hyperspace Star',

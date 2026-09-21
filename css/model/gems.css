@@ -45,13 +45,13 @@
 .gem--special::after {
   content: '';
   position: absolute;
-  inset: -6px;
+  inset: -9px;
   border-radius: 50%;
   pointer-events: none;
   animation: special-pulse 1.4s ease-in-out infinite;
 }
 
-.gem--discharger::after { box-shadow: 0 0 10px 3px rgba(224, 179, 74, 0.85); }
+.gem--discharger::after { box-shadow: 0 0 15px 5px rgba(224, 179, 74, 0.85); }
 
 @keyframes special-pulse {
   0%, 100% { opacity: 0.55; transform: scale(1); }
@@ -89,24 +89,24 @@
 .gem--laser-row::before,
 .gem--laser-row::after {
   top: 50%;
-  border-top: 6px solid transparent;
-  border-bottom: 6px solid transparent;
+  border-top: 9px solid transparent;
+  border-bottom: 9px solid transparent;
   transform: translateY(-50%);
 }
-.gem--laser-row::before { left: -11px;  border-right: 9px solid var(--gold); } /* points left */
-.gem--laser-row::after  { right: -11px; border-left: 9px solid var(--gold); }  /* points right */
+.gem--laser-row::before { left: -17px;  border-right: 14px solid var(--gold); }
+.gem--laser-row::after  { right: -17px; border-left: 14px solid var(--gold); }
 
 /* Column laser (spawned from a VERTICAL match) — arrows on the top
    and bottom edges, pointing outward along the column it clears. */
 .gem--laser-col::before,
 .gem--laser-col::after {
   left: 50%;
-  border-left: 6px solid transparent;
-  border-right: 6px solid transparent;
+  border-left: 9px solid transparent;
+  border-right: 9px solid transparent;
   transform: translateX(-50%);
 }
-.gem--laser-col::before { top: -11px;    border-bottom: 9px solid var(--gold); } /* points up */
-.gem--laser-col::after  { bottom: -11px; border-top: 9px solid var(--gold); }    /* points down */
+.gem--laser-col::before { top: -17px;    border-bottom: 14px solid var(--gold); } /* points up */
+.gem--laser-col::after  { bottom: -17px; border-top: 14px solid var(--gold); }    /* points down */
 
 @keyframes laser-pulse {
   0%, 100% { opacity: 0.6; }
@@ -135,5 +135,5 @@
    color is overridden here), which reads fine sitting behind a star
    shape, unlike behind the laser's sharp triangle arrows above. */
 .gem--hyperstar::after {
-  box-shadow: 0 0 12px 4px rgba(255, 221, 64, 0.95);
+  box-shadow: 0 0 18px 6px rgba(255, 221, 64, 0.95);
 }

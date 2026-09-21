@@ -57,7 +57,7 @@ export function applyBoonEffect(def) {
       });
       break;
 
-    case 'gem_multiplier_maniac':
+    case 'gem_multiplier_addict':
       gemBaseState.perGem[effect.gem].multiplierBonus += effect.amount;
       ALL_GEM_IDS.forEach(id => {
         if (id !== effect.gem) gemBaseState.perGem[id].multiplierBonus += effect.othersPenalty;

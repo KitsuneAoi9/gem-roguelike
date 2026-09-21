@@ -105,7 +105,7 @@ The main grid never contains a special-gem type; that lives in `specialGemState.
 
 ### Rule 11 — Boon effects are data-driven, dispatched by `effect.kind`
 
-Every `BOON_POOL` entry's `effect` object has a `kind` field (`'gem_score_delta'`, `'gem_multiplier_delta'`, `'gem_score_lush'`, `'gem_multiplier_maniac'`, `'affinity'`, `'frenzy'`, `'global_score_boost'`). `js/gameplay/boon_effects.js`'s `applyBoonEffect()` is the single place that switches on `effect.kind` and mutates the right state bucket. Do not add ad-hoc per-boon-id branching anywhere else — a new effect *shape* gets a new `kind` and a new `case` in that one switch.
+Every `BOON_POOL` entry's `effect` object has a `kind` field (`'gem_score_delta'`, `'gem_multiplier_delta'`, `'gem_score_lush'`, `'gem_multiplier_addict'`, `'affinity'`, `'frenzy'`, `'global_score_boost'`). `js/gameplay/boon_effects.js`'s `applyBoonEffect()` is the single place that switches on `effect.kind` and mutates the right state bucket. Do not add ad-hoc per-boon-id branching anywhere else — a new effect *shape* gets a new `kind` and a new `case` in that one switch.
 
 ---
 
@@ -326,7 +326,7 @@ This is the core mechanic reworked this round. Full pipeline, run once per casca
 | Bounty / Brilliance / Carat | `gemBaseState.perGem[gem].scoreBonus` | `gem_score_delta` | permanent base-value change, one gem |
 | Lush | `gemBaseState.perGem[*].scoreBonus` | `gem_score_lush` | permanent, +to one gem, -to every other gem (including locked ones) |
 | Enthusiast / Addict / Fanatic | `gemBaseState.perGem[gem].multiplierBonus` | `gem_multiplier_delta` | permanent base-value change, one gem |
-| Maniac | `gemBaseState.perGem[*].multiplierBonus` | `gem_multiplier_maniac` | permanent, +to one gem, -to every other gem |
+| Maniac | `gemBaseState.perGem[*].multiplierBonus` | `gem_multiplier_addict` | permanent, +to one gem, -to every other gem |
 | Gemstone Gamble / Trinket Wager / Gem Greed / Jewel Avarice | `boonEffectState.globalScoreMultiplier`/`globalScoreBonus`/`targetScoreMultiplier` | `global_score_boost` | once per cascade step, applies to the WHOLE step's total |
 
 ### Base-value change vs. per-match bonus — why they're not the same

@@ -199,12 +199,12 @@ export function renderBoard(boardEl, grid, onCellClick, options = {}) {
   boardEl.dataset.numCols = numCols;
 
   // The board used to be a fixed 8x8, so CSS could hardcode
-  // `repeat(8, 46px)`. Now the visible rectangle's size changes as
+  // `repeat(8, 69px)`. Now the visible rectangle's size changes as
   // the player expands/shrinks the board, so JS drives the grid
   // template directly — this inline style always wins over whatever
   // default is left in layout.css.
-  boardEl.style.gridTemplateColumns = `repeat(${numCols}, 46px)`;
-  boardEl.style.gridTemplateRows = `repeat(${numRows}, 46px)`;
+  boardEl.style.gridTemplateColumns = `repeat(${numCols}, 69px)`;
+  boardEl.style.gridTemplateRows = `repeat(${numRows}, 69px)`;
 
   // O(1) lookup for "is this cell part of a constructed bonus tile?"
   // (still the dormant markBonusTile()/installedTiles feature — see

@@ -16,18 +16,16 @@ export const GAME_TAGLINE = "A fun hobby game";
 export const BUTTONS = {
   RESET: "start over",
   NEXT_LEVEL: "Next Level",
+  LEAVE_SHOP: "Leave", // NEW
 };
 
 // --- dialog titles ---
 export const DIALOG_TITLES = {
   LOSE: "Out of moves",
-  // NEW — stuck-board game over. This reuses the SAME dialog element
-  // as LOSE (see main.js's showNoMovesDialog()) — the two scenarios
-  // just set different title/message text at show-time rather than
-  // getting their own separate dialog markup.
   NO_MOVES: "Game Over",
   LEVEL_UP: "Level Cleared!",
   BOON: "Choose a Boon",
+  SHOP: "The Shop", // NEW
 };
 
 // --- static in-game messages (no interpolated values) ---
@@ -48,3 +46,6 @@ export const MESSAGES = {
   EXPAND_INVALID: "that spot won't work — the whole shape must land on empty space touching your current board, and stay within the board's outer limit",
   SHRINK_INVALID: "that spot won't work — every cell in the shape must already be part of your board",
 };
+
+// Version
+export const GAME_VERSION = "0.2.0";

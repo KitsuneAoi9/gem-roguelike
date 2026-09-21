@@ -4,6 +4,20 @@
    data/UI text (scores, labels, messages).
    ============================================================ */
 
+/* NEW — global text-size bump. Root font-size drives every rem-based
+size elsewhere in the game (nearly everything — stats, history
+lines, boon/shop cards, dialog text), so bumping it here scales
+the whole UI's text proportionally instead of hand-editing every
+individual font-size rule. Default browser root is 16px — 18px is
+a ~12.5% increase, which works out to roughly +1-2px on the game's
+smaller UI text and a bit more on the larger headings. Scaling
+proportionally (not by a flat +2px everywhere) is deliberate — it
+keeps the existing size relationships between elements looking
+right instead of flattening them. */
+html {
+  font-size: 18px;
+}
+
 body {
   font-family: 'Georgia', 'Iowan Old Style', serif;
 }

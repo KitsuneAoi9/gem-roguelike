@@ -35,6 +35,13 @@
       </div>
       <div id="gem-stats-list" class="gem-stats-list"></div>
     </div>
+    <!-- NEW — right-side History panel, mirrors #side-stats on the
+     left. Populated by main.js's renderHistoryPanel(), called every
+     time a new entry is pushed via history.js's addHistoryEntry(). -->
+    <div id="history-panel" class="history-panel">
+      <h2>History</h2>
+      <div id="history-list" class="history-list"></div>
+    </div>
     <!-- Placeholder text below — main.js overwrites this on load from
      resources/constants.js, so that file is the real source of truth. -->
     <div class="masthead">
@@ -107,6 +114,17 @@
         <div id="boon-choices" class="boon-choices"></div>
       </div>
     </div>
+    <div id="shop-dialog" class="dialog-overlay hidden">
+      <div class="dialog-box shop-dialog-box">
+        <h2 id="shop-title">The Shop</h2>
+        <p id="shop-subtitle"></p>
+        <div id="shop-choices" class="shop-choices"></div>
+        <button id="shop-leave">Leave</button>
+      </div>
+    </div>
+    <!-- Placeholder text below — main.js overwrites this on load
+     from resources/constant/text.js's GAME_VERSION. -->
+    <div id="version-tag" class="version-tag">v0.0.0</div>
     <script type="module" src="js/gameplay/main.js"></script>
   </body>
 </html>

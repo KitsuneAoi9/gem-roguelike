@@ -59,7 +59,7 @@ const GEM_ARCHETYPES = [
     type: BOON_TYPE.RISKY_BUFF,
     rarity: BOON_RARITY.RARE,
     maxOccurrences: 3, // Unlimited
-    effect: { kind: 'frenzy', bonus: 100, penalty: -10 },
+    effect: { kind: 'frenzy', bonus: 100, penalty: -5 },
   },
   {
     idSuffix: 'bounty',
@@ -113,7 +113,7 @@ const GEM_ARCHETYPES = [
     type: BOON_TYPE.BUFF,
     rarity: BOON_RARITY.RARE,
     maxOccurrences: 3,
-    effect: { kind: 'gem_multiplier_delta', amount:  2.0, othersPenalty: -0.5 },
+    effect: { kind: 'gem_multiplier_addict', amount:  2.0, othersPenalty: -0.5 },
   },
   {
     idSuffix: 'maniac',
@@ -122,7 +122,7 @@ const GEM_ARCHETYPES = [
     type: BOON_TYPE.BUFF,
     rarity: BOON_RARITY.EPIC,
     maxOccurrences: 1,
-    effect: { kind: 'gem_multiplier_maniac', amount: 5 },
+    effect: { kind: 'gem_multiplier_delta', amount: 5 },
   },
   {
     idSuffix: 'fanatic',

@@ -1,4 +1,4 @@
-Patch Note 2026/09/21
+Patch Note 2026/09/21 001
 
 1. Add click and drag feature.
 2. A gameover dialogue now will be prompted when there is no more moves available.
@@ -35,3 +35,53 @@ Target Score = ROUND(2000 * (1.35 ^ (Level-1))) * Level + 500 * Pow(1.5, Level)
 
 To
 Target Score = ROUND(2000 * (1.25 ^ (Level-1))) * Level + 500 * Pow(1.5, Level)
+
+Patch Note 2026/09/21 002
+
+1. Fixes Hyperstar scoring.
+FIXED — the Hyperstar's own cell used to get folded into the
+targetGemType matched-group's `length`, which scored IT using the
+WIPED color's base value/multiplier instead of its own (whatever
+color the Hyperstar itself actually happened to be sitting on).
+Now it's pulled out and scored separately, as its own incidental
+cell, using its real underlying gem type — same treatment any
+other incidentally-cleared cell gets.
+
+2. Fix match score bonus not reflected in the Gem Stat Panel
+
+3. Green/red coloring on boosted/penalized stats for the Gem Stats screen. Green if the value is higher than the default value, red if the value is higher than the default value.
+
+4. Discharge now explodes in the a diamond shape.
+
+    X
+  X X X
+X X X X X
+  X X X
+    X
+
+5. Fixed Fanatic boon. Multiplier is now applied correctly.
+
+6. Added history chat. Player now can view score history, boon picked, and boon bought in the history chat.
+
+7. Added Shop. For now, shop will only offers 5 boons. Use score to buy boons.
+
+Shop item price = Base score * Rarity * Inflation Scaling * Base Multiplier
+
+Base score = 500
+Rarity = Common: 1x | Uncommon: 1.25x | Rare: 1.75x | Epic: 2.5x | Legendary: 3.25x 
+Inflation Scaling = 15% per 5 levels ( after level 5)
+Base Multiplier = 1
+
+8. Fixed the spawn point of special gems (Laser Beam, etc)
+
+10. Changed the target score forumla again. 
+
+From
+Target Score = ROUND(2000 * (1.25 ^ (Level-1))) * Level + 500 * Pow(1.5, Level)
+
+To
+Target Score = ROUND(1000 * (1.15 ^ (Level-1))) * Level + 500 * Pow(1.05, Level)
+
+11. Increase the size of the text and the board by about 50%.
+
+12. Added version text.

@@ -23,48 +23,69 @@
 // comments below.)
 // ============================================================
 
+// --- imports from gameplay ---
 import {
   SIZE, findMatches, hasAnyMatch,
-  hasPossibleMove, swap, collapseAndFill, BLOCKED, findHintMove
+  hasPossibleMove, swap, collapseAndFill,
+  BLOCKED, findHintMove
 } from './board.js';
+
+import { resetBoons, generateBoonOffer, pickBoon } from './boon.js';
+import { applyBoonEffect, resetBoonEffects } from './boon_effects.js';
+
+import {
+  rollBoonShopOffer, isBoonPurchasedThisVisit, markBoonPurchased,
+  calculateBoonPrice, shopTierForLevel, resetBoonShop,
+} from './boon_shop.js';
+
+import { getGemBaseScore, getGemBaseMultiplier } from './gem_base.js';
+import { addHistoryEntry, resetHistory } from './history.js';
+
+import { resetProgression, advanceLevel } from './progression.js';
 
 import {
   renderBoard, updateSelectedVisual, markMatchedGems,
   computeCellPitch, animateSwap, showHintHighlight
 } from './render.js';
 
-import { calculateCascadeStepScore } from './score.js';
+import { calculateCascadeStepScore, getMatchBonusForGem } from './score.js';
+import { shouldOpenShop, resetShop } from './shop.js';
 
 import {
-  PREVENT_DEADLOCK, DEFAULT_SCORE, SWAP_ANIM_MS, MATCH_CLEAR_DELAY_MS,
-  CASCADE_CHECK_DELAY_MS, LEVEL_UP_BONUS_MOVES, ENABLE_MOVES_LIMIT, SCORE_POPUP_MS,
-  NO_MOVES_GAME_OVER_DELAY_MS, HINT_DELAY_MS
-} from '../resources/constant/constants.js';
-
-import {
-  GAME_NAME, GAME_TAGLINE, BUTTONS, DIALOG_TITLES, MESSAGES
-} from '../resources/constant/text.js';
+  resolveSpecialGems, applySpawns, clearSpecialGems, resetSpecialGems,
+  triggerHyperstarSingle, triggerHyperstarLaserCombo, triggerHyperstarDouble, triggerLaserCombo,
+  triggerHyperstarDischargerCombo, triggerDischargerLaserCombo, triggerDischargerDouble,
+} from './special_gem.js';
 
 import {
   expandBoard, shrinkBoard, resetTiles,
   getExpandableCells, rebuildGridRespectingBlocked,
 } from './tiles.js';
 
-import { progressionState } from '../resources/progression/progression.js';
-import { resetProgression, advanceLevel } from './progression.js';
-import { resetBoons, generateBoonOffer, pickBoon } from './boon.js';
-import { applyBoonEffect, resetBoonEffects } from './boon_effects.js';
-import { TILE_SHAPES, GEM_DEFINITIONS, ALL_GEM_CATALOG } from '../resources/constant/constants.js';
-import { getGemBaseScore, getGemBaseMultiplier } from './gem_base.js';
+// --- imports from resources ---
+import { 
+  DEFAULT_GEM_BASE_SCORE, DEFAULT_GEM_BASE_MULTIPLIER 
+} from '../resources/base%20value/base_score.js';
+
+import { BOON_TYPE } from '../resources/boon/boon.js';
 import { boonEffectState } from '../resources/boon/boon_effect_state.js';
 
+import {
+  PREVENT_DEADLOCK, DEFAULT_SCORE, SWAP_ANIM_MS, MATCH_CLEAR_DELAY_MS,
+  CASCADE_CHECK_DELAY_MS, LEVEL_UP_BONUS_MOVES, ENABLE_MOVES_LIMIT, SCORE_POPUP_MS,
+  NO_MOVES_GAME_OVER_DELAY_MS, HINT_DELAY_MS,
+  TILE_SHAPES, GEM_DEFINITIONS, ALL_GEM_CATALOG
+} from '../resources/constant/constants.js';
+
+import {
+  GAME_NAME, GAME_TAGLINE, BUTTONS, DIALOG_TITLES, MESSAGES, GAME_VERSION
+} from '../resources/constant/text.js';
+
+import { historyState } from '../resources/history/history_state.js';
+import { boonShopState } from '../resources/shop/boon_shop_state.js';
 import { SPECIAL_GEM_TYPE } from '../resources/special%20gem/special_gem.js';
 import { specialGemState } from '../resources/special%20gem/special_gem_state.js';
-import {
-  resolveSpecialGems, applySpawns, clearSpecialGems, resetSpecialGems,
-  triggerHyperstarSingle, triggerHyperstarLaserCombo, triggerHyperstarDouble, triggerLaserCombo,
-  triggerHyperstarDischargerCombo, triggerDischargerLaserCombo, triggerDischargerDouble,
-} from './special_gem.js';
+import { progressionState } from '../resources/progression/progression.js';
 
 // --- DOM references, grabbed once ---
 const boardEl         = document.getElementById('board');
@@ -95,6 +116,15 @@ const boonChoicesEl   = document.getElementById('boon-choices');
 const globalMultiplierEl = document.getElementById('global-multiplier');
 const globalBonusEl      = document.getElementById('global-bonus');
 const gemStatsListEl     = document.getElementById('gem-stats-list');
+
+const historyListEl = document.getElementById('history-list');
+const shopDialogEl    = document.getElementById('shop-dialog');
+const shopTitleEl     = document.getElementById('shop-title');
+const shopSubtitleEl  = document.getElementById('shop-subtitle');
+const shopChoicesEl   = document.getElementById('shop-choices');
+const shopLeaveBtn    = document.getElementById('shop-leave');
+
+const versionTagEl = document.getElementById('version-tag');
 
 // NEW — the whole "MOVES LEFT" stat block, so it can be hidden
 // entirely when ENABLE_MOVES_LIMIT is off (constants.js).
@@ -138,6 +168,14 @@ let pendingLevelUp = false;
 // showHintNow()). Tracked so a new schedule call can cancel whatever
 // was pending before starting a fresh countdown.
 let hintTimeoutId = null;
+// Set by openShopDialog(); holds the "resume whatever was paused for
+// the shop" callback, invoked once the player clicks Leave. Same
+// stash-a-callback pattern showLevelUpDialog()/showBoonDialog() use.
+let shopContinuation = null;
+// Which shop tier is currently open — set once when the shop opens,
+// read by renderShopDialog() for every card's price. Doesn't change
+// mid-visit.
+let currentShopTier = 1;
 
 /**
  * Sets every bit of static, non-runtime-dependent text (title,
@@ -157,6 +195,9 @@ function applyStaticText() {
   loseTitleEl.textContent = DIALOG_TITLES.LOSE;
   levelUpTitleEl.textContent = DIALOG_TITLES.LEVEL_UP;
   boonTitleEl.textContent = DIALOG_TITLES.BOON;
+  shopTitleEl.textContent = DIALOG_TITLES.SHOP;       // NEW
+  shopLeaveBtn.textContent = BUTTONS.LEAVE_SHOP;      // NEW
+  versionTagEl.textContent = GAME_VERSION; // NEW
 }
 
 /**
@@ -175,28 +216,39 @@ function applyMovesLimitVisibility() {
 
 /**
  * Renders the left-side stats panel: each active gem's current
- * matching bonus (its Affinity total), base score, and base
- * multiplier, plus the two global boon totals.
+ * matching bonus (Affinity + Frenzy combined — see score.js's
+ * getMatchBonusForGem()), base score, and base multiplier, plus the
+ * two global boon totals.
  *
  * The ONLY things that can change any of these numbers are boon
- * picks (Affinity/Bounty/Brilliance/Lust/Carat/Enthusiast/Addict/
+ * picks (Affinity/Bounty/Brilliance/Lush/Frenzy/Enthusiast/Addict/
  * Maniac/Fanatic, and the 4 global boons) — so this only needs to run
  * once in init() and again right after applyBoonEffect(), not on
  * every score change.
  *
  * Only the 7 ACTIVE gems are shown (GEM_DEFINITIONS) — the 4
- * locked/future gems (Onyx etc.) can still quietly accumulate Lust/
+ * locked/future gems (Onyx etc.) can still quietly accumulate Lush/
  * Maniac penalties in gemBaseState, but showing that here would just
  * be confusing before they're actually unlockable.
  *
  * Each row's "match" stat carries a small gem icon inline (the same
- * svg render.js uses for the board itself).
+ * svg render.js uses for the board itself). Every number shown here
+ * — the two global stats and all three per-gem stats — is also
+ * colored relative to its OWN no-boon default (see statDiffClass()):
+ * green once a boon has pushed it up, red once a boon has pulled it
+ * down, left alone if nothing's touched it.
  *
  * @returns {void}
  */
 function renderSideStats() {
   globalMultiplierEl.textContent = `${boonEffectState.globalScoreMultiplier.toFixed(2)}x`;
   globalBonusEl.textContent = signed(boonEffectState.globalScoreBonus);
+  // Global multiplier's no-boon default is 1.0x; global bonus's is +0.
+  // className is fully overwritten (not just toggled) each render, so
+  // there's no risk of a stale boosted/penalized class lingering from
+  // a previous boon pick.
+  globalMultiplierEl.className = `side-stat-value ${statDiffClass(boonEffectState.globalScoreMultiplier, 1.0)}`;
+  globalBonusEl.className = `side-stat-value ${statDiffClass(boonEffectState.globalScoreBonus, 0)}`;
 
   // Rebuilt from scratch every call — cheap at 7 rows, and much
   // simpler than diffing individual rows in place.
@@ -205,19 +257,63 @@ function renderSideStats() {
   GEM_DEFINITIONS.forEach(({ id, name, file }) => {
     const baseScore = getGemBaseScore(id);
     const baseMultiplier = getGemBaseMultiplier(id);
-    const matchBonus = boonEffectState.affinityBonus[id] || 0;
+    // Combines Affinity's flat bonus with every active Frenzy pick's
+    // bonus/penalty for this specific gem — this is what fixes
+    // Frenzy never showing up here (it used to only read
+    // boonEffectState.affinityBonus directly, which Frenzy never
+    // touches).
+    const matchBonus = getMatchBonusForGem(id);
+
+    // Each stat's color is relative to ITS OWN no-boon default: base
+    // score defaults to 10, base multiplier to 1.0, match bonus to 0
+    // (no Affinity/Frenzy picked for this gem at all).
+    const baseScoreClass = statDiffClass(baseScore, DEFAULT_GEM_BASE_SCORE);
+    const baseMultiplierClass = statDiffClass(baseMultiplier, DEFAULT_GEM_BASE_MULTIPLIER);
+    const matchBonusClass = statDiffClass(matchBonus, 0);
 
     const row = document.createElement('div');
     row.className = 'gem-stat-row';
     row.innerHTML = `
       <div class="gem-stat-name"><img class="gem-stat-icon" src="css/model/svg/${file}" alt="${name}">${name}</div>
       <div class="gem-stat-values">
-        <span>base ${baseScore}</span>
-        <span>x${baseMultiplier.toFixed(2)}</span>
-        <span class="gem-stat-bonus">match ${signed(matchBonus)}</span>
+        <span class="${baseScoreClass}">base ${baseScore}</span>
+        <span class="${baseMultiplierClass}">x${baseMultiplier.toFixed(2)}</span>
+        <span class="gem-stat-bonus ${matchBonusClass}">match ${signed(matchBonus)}</span>
       </div>
     `;
     gemStatsListEl.appendChild(row);
+  });
+}
+
+/**
+ * Rebuilds the right-side History panel from historyState.entries.
+ *
+ * Newest entries are shown at the TOP of the list (reverse
+ * chronological) — a running combat log reads better with the
+ * latest line front-and-center than making the player scroll down
+ * every time something new happens.
+ *
+ * Colors each line via a CSS class off its stored `tone`: green
+ * ('positive'), red ('negative'), or the panel's normal dim color
+ * ('neutral' — no extra class needed, it just inherits).
+ *
+ * Called every time a new entry is pushed (see the addHistoryEntry()
+ * call sites below) — cheap at a max of MAX_HISTORY_ENTRIES (200)
+ * short rows, same "just rebuild it from scratch" approach
+ * renderSideStats() already uses.
+ *
+ * @returns {void}
+ */
+function renderHistoryPanel() {
+  historyListEl.innerHTML = '';
+  // .slice().reverse() so historyState.entries ITSELF stays
+  // oldest-first (natural push order, easiest to reason about) —
+  // only the DISPLAY is newest-first.
+  historyState.entries.slice().reverse().forEach(entry => {
+    const row = document.createElement('div');
+    row.className = `history-entry history-entry--${entry.tone}`;
+    row.textContent = entry.text;
+    historyListEl.appendChild(row);
   });
 }
 
@@ -239,6 +335,74 @@ function toBooleanGrid(cells) {
 /** Formats a score delta with an explicit sign; negative values keep their own "-". */
 function signed(amount) {
   return amount >= 0 ? `+${amount}` : `${amount}`;
+}
+
+/**
+ * Builds the History/popup text for one cascade STEP resolved via the
+ * normal match-detection path (resolveMatches()) — NOT the
+ * swap-activated special-gem combos, which build their own dedicated
+ * "<Combo Name>: <score>" text at their own call sites (see the
+ * handleXXX functions below).
+ *
+ * Format:
+ *   - Single formed match:      "Match 3 Amethyst: +80"
+ *   - Multiple simultaneous
+ *     formed matches:           "Match 3 Amethyst + Match 4 Ruby: +215"
+ *   - Any blast-chained
+ *     (incidental) cells
+ *     riding along this step:   "...+ Chain Reaction (5 gems): +215"
+ *   - A combo step (2nd+ link
+ *     in one cascade):          "Combo x2: Match 3 Ruby: +140"
+ *
+ * @param {{gemType: number, length: number}[]} matchedGroups
+ * @param {{gemType: number, row: number, col: number}[]} incidentalCells
+ * @param {number} comboCount
+ * @param {number} gained
+ * @returns {string}
+ */
+function buildMatchMessage(matchedGroups, incidentalCells, comboCount, gained) {
+  // One "Match N GemName" fragment per formed group this step —
+  // usually just one, but two separate matches CAN complete on the
+  // same board update (e.g. a cascade's fall completing two
+  // unrelated runs at once).
+  const matchParts = matchedGroups.map(({ gemType, length }) => {
+    const gemName = GEM_DEFINITIONS[gemType]?.name ?? 'Gem';
+    return `Match ${length} ${gemName}`;
+  });
+
+  // A chain-reaction (an EXISTING special gem's blast triggering as
+  // part of this same step) gets its own fragment rather than being
+  // silently folded into the score with no mention at all.
+  if (incidentalCells.length > 0) {
+    matchParts.push(`Chain Reaction (${incidentalCells.length} gems)`);
+  }
+
+  // Shouldn't normally happen (a scored step always has SOME cleared
+  // cells) but guards against printing "undefined: +80".
+  const body = matchParts.length > 0 ? matchParts.join(' + ') : 'Match';
+
+  const prefix = comboCount > 1 ? `Combo x${comboCount}: ` : '';
+  return `${prefix}${body}: ${signed(gained)}`;
+}
+
+/**
+ * Picks the CSS class that colors a side-stat value relative to its
+ * OWN no-boon default: green (gem-stat-boosted) if a boon has pushed
+ * it above that default, red (gem-stat-penalized) if a boon has
+ * pulled it below, or '' (leave the row's normal color alone) if
+ * nothing's touched it yet. Shared by every stat shown in the side
+ * panel — each caller just passes in its own no-boon default (10 for
+ * base score, 1.0 for base multiplier, 0 for match bonus / global
+ * bonus, 1.0 for global multiplier).
+ *
+ * @param {number} value - the stat's current (boon-adjusted) value.
+ * @param {number} defaultValue - what the stat would be with no boons picked at all.
+ * @returns {string} a CSS class name, or '' for "unchanged from default."
+ */
+function statDiffClass(value, defaultValue) {
+  if (value > defaultValue) return 'gem-stat-boosted';
+  if (value < defaultValue) return 'gem-stat-penalized';
+  return '';
 }
 
 /**
@@ -302,11 +466,13 @@ function init() {
   // reset boon-driven state BEFORE progression — calculateScoreTarget()
   // reads the target-score multiplier, which must be back at 1.0 first
   resetBoonEffects();
-  // "start over" always begins a fresh run at level 1
   resetProgression(1);
   resetBoons();
   resetTiles();
   resetSpecialGems();
+  resetHistory(); // NEW — clears the panel's backing list for a fresh run
+  resetShop(); // NOTE: only if you've already wired this from the old shop system — otherwise skip
+  resetBoonShop();
 
   // resetTiles() (just above, already called) seeds tileState.blockedCells
   // with the starting blocked ring; pre-allocate a fully-blocked grid of
@@ -347,8 +513,12 @@ function init() {
   levelUpDialogEl.classList.add('hidden');
   boonDialogEl.classList.add('hidden');
 
+  shopDialogEl.classList.add('hidden');
+  shopContinuation = null;
+
   renderSideStats(); // reflect the freshly-reset boon/gem state
   renderBoardWithInteractions();
+  renderHistoryPanel(); // NEW — clears the panel's DOM to match the reset list
   scheduleHintTimer(); // NEW — the very first idle moment, before any match has happened yet
 }
 
@@ -384,18 +554,31 @@ function showScorePopup(text) {
  * special-gem combo, so level-up handling can't drift out of sync
  * between any of them.
  *
+ * NEW — every call now also logs a line into the History panel: the
+ * exact same text that would show in the floating score popup, PLUS
+ * a separate "level cleared" line if this gain crossed one or more
+ * targets. This runs regardless of whether the popup actually shows
+ * (it doesn't, on a level-up — the dialog covers the screen instead)
+ * so the history panel always has the full record even for moments
+ * the popup itself skips.
+ *
  * Does NOT show the level-up dialog itself — callers decide WHEN via
  * `pendingLevelUp`, so a cascade can keep running after crossing a
  * target instead of being interrupted mid-chain-reaction.
  *
  * @param {number} gained - score to add.
  * @param {string} popupText - text to float above the board if this
- *   gain DIDN'T level up.
+ *   gain DIDN'T level up (and, now, the text logged to History either way).
  * @returns {boolean} true if at least one level was cleared.
  */
 function applyScoreGain(gained, popupText) {
   score += gained;
   scoreEl.textContent = score;
+
+  // Snapshot BEFORE the while loop below, so a single huge gain that
+  // happens to cross more than one level's target at once can still
+  // report the whole span in its history line, not just "the last one."
+  const levelBeforeGain = progressionState.level;
 
   let leveledUp = false;
   while (score >= progressionState.scoreTarget) {
@@ -408,6 +591,13 @@ function applyScoreGain(gained, popupText) {
     leveledUp = true;
   }
 
+  // NEW — log this gain into the History panel. Tone is derived
+  // straight from the sign of `gained`: a Frenzy/Lust-type penalty
+  // can legitimately make a cascade step's total negative, and that
+  // should read as a red line just like an invalid outcome would.
+  const tone = gained > 0 ? 'positive' : gained < 0 ? 'negative' : 'neutral';
+  addHistoryEntry('score', popupText, tone);
+
   if (leveledUp) {
     levelEl.textContent = progressionState.level;
     targetEl.textContent = progressionState.scoreTarget;
@@ -415,11 +605,21 @@ function applyScoreGain(gained, popupText) {
     // The level-up dialog is about to cover the screen — blank the
     // status line so it doesn't show a stale prompt underneath it.
     messageEl.textContent = '';
+
+    // NEW — a level-up gets its OWN follow-up history line, separate
+    // from the score-gain line just above. Handles clearing more than
+    // one level in a single gain (a big enough cascade/global-boost
+    // total COULD cross more than one target at once).
+    const clearedLabel = progressionState.level - levelBeforeGain > 1
+      ? `Level ${levelBeforeGain}-${progressionState.level - 1}`
+      : `Level ${levelBeforeGain}`;
+    addHistoryEntry('score', `${clearedLabel} cleared! Moving to Level ${progressionState.level}.`, 'levelup');
   } else {
     // NEW — score deltas float above the board instead of appearing
     // in the #message line.
     showScorePopup(popupText);
   }
+  renderHistoryPanel();
 
   return leveledUp;
 }
@@ -638,6 +838,14 @@ function finishSwapActivatedCombo(clearedCells, gained, popupText) {
  * combo (see below) — this function is now only reached for an
  * ordinary gem with no special overlay.
  *
+ * FIXED — the Hyperstar's own cell used to get folded into the
+ * targetGemType matched-group's `length`, which scored IT using the
+ * WIPED color's base value/multiplier instead of its own (whatever
+ * color the Hyperstar itself actually happened to be sitting on).
+ * Now it's pulled out and scored separately, as its own incidental
+ * cell, using its real underlying gem type — same treatment any
+ * other incidentally-cleared cell gets.
+ *
  * @param {number} hyperRow
  * @param {number} hyperCol
  * @param {number} targetGemType
@@ -645,12 +853,26 @@ function finishSwapActivatedCombo(clearedCells, gained, popupText) {
  */
 function handleHyperstarSingle(hyperRow, hyperCol, targetGemType) {
   const clearedCells = triggerHyperstarSingle(grid, hyperRow, hyperCol, targetGemType);
+
+  // Read the Hyperstar's OWN underlying color BEFORE anything gets
+  // nulled out later — it's whatever gem type it was born from, not
+  // necessarily (and generally not) targetGemType.
+  const hyperstarOwnGemType = grid[hyperRow][hyperCol];
+
+  // Strip the Hyperstar's own cell out of the wipe count so the
+  // matched-group length reflects ONLY cells that are genuinely that
+  // color — otherwise every wipe over-counted by exactly 1 cell of
+  // the wrong color.
+  const wipedCells = clearedCells.filter(([r, c]) => !(r === hyperRow && c === hyperCol));
+
   const gained = calculateCascadeStepScore({
-    matchedGroups: [{ gemType: targetGemType, length: clearedCells.length }],
-    incidentalCells: [],
+    matchedGroups: [{ gemType: targetGemType, length: wipedCells.length }],
+    // The Hyperstar's own cell scores as one flat incidental hit for
+    // ITS OWN gem — it was never actually part of the wiped color.
+    incidentalCells: [{ gemType: hyperstarOwnGemType, row: hyperRow, col: hyperCol }],
     comboCount: 1,
   });
-  finishSwapActivatedCombo(clearedCells, gained, `hyperstar! ${signed(gained)}`);
+  finishSwapActivatedCombo(clearedCells, gained, `Hyperstar Wipe: ${signed(gained)}`);
 }
 
 /**
@@ -669,7 +891,7 @@ function handleHyperstarLaserCombo(hyperRow, hyperCol, laserColorType) {
     incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
     comboCount: 1,
   });
-  finishSwapActivatedCombo(clearedCells, gained, `hyperstar laser combo! ${signed(gained)}`);
+  finishSwapActivatedCombo(clearedCells, gained, `Hyperstar Laser Combo: ${signed(gained)}`);
 }
 
 /**
@@ -689,7 +911,7 @@ function handleHyperstarDischargerCombo(hyperRow, hyperCol, dischargerColorType)
     incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
     comboCount: 1,
   });
-  finishSwapActivatedCombo(clearedCells, gained, `hyperstar discharger combo! ${signed(gained)}`);
+  finishSwapActivatedCombo(clearedCells, gained, `Hyperstar Discharger Combo: ${signed(gained)}`);
 }
 
 /**
@@ -705,7 +927,7 @@ function handleHyperstarDouble() {
     incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
     comboCount: 1,
   });
-  finishSwapActivatedCombo(clearedCells, gained, `double hyperstar! ${signed(gained)}`);
+  finishSwapActivatedCombo(clearedCells, gained, `Double Hyperstar: ${signed(gained)}`);
 }
 
 /**
@@ -723,7 +945,7 @@ function handleLaserCombo(originRow, originCol) {
     incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
     comboCount: 1,
   });
-  finishSwapActivatedCombo(clearedCells, gained, `laser combo! ${signed(gained)}`);
+  finishSwapActivatedCombo(clearedCells, gained, `Laser Combo: ${signed(gained)}`);
 }
 
 /**
@@ -743,7 +965,7 @@ function handleDischargerLaserCombo(dischargerRow, dischargerCol, laserOrientati
     incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
     comboCount: 1,
   });
-  finishSwapActivatedCombo(clearedCells, gained, `discharger laser combo! ${signed(gained)}`);
+  finishSwapActivatedCombo(clearedCells, gained, `Discharger Laser Combo: ${signed(gained)}`);
 }
 
 /**
@@ -762,7 +984,7 @@ function handleDischargerDouble(originRow, originCol) {
     incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
     comboCount: 1,
   });
-  finishSwapActivatedCombo(clearedCells, gained, `double discharger! ${signed(gained)}`);
+  finishSwapActivatedCombo(clearedCells, gained, `Double Discharger: ${signed(gained)}`);
 }
 
 /**
@@ -905,7 +1127,11 @@ function attemptSwap(r1, c1, r2, c2) {
     }
     messageEl.textContent = '';
     comboCount = 0;
-    resolveMatches();
+    // Pass this swap's two cells through so THIS FIRST cascade step
+    // can spawn any resulting special gem at whichever swapped cell
+    // ended up part of the match, instead of the old fixed
+    // middle/intersection rule.
+    resolveMatches([[r1, c1], [r2, c2]]);
   }, SWAP_ANIM_MS);
 }
 
@@ -913,13 +1139,20 @@ function attemptSwap(r1, c1, r2, c2) {
  * Recursive-by-timeout loop: pop current matches, award combo-scaled
  * score, check for a level-up, collapse+refill, then check for new
  * matches caused by the fall (cascades). Repeats until the board is
- * stable, then hands off to checkEndState() — UNLESS a level-up
- * happened somewhere along the way, in which case the level-up
- * dialog is shown instead (see `pendingLevelUp`).
+ * stable, then hands off to checkEndState().
  *
+ * @param {[[number, number], [number, number]] | null} [swapCells] -
+ *   the two cells the player just swapped, ONLY on the very first
+ *   call following a real swap (see attemptSwap()'s fallback branch —
+ *   the ONLY call site that ever passes this). Every deeper cascade
+ *   link is scheduled via `setTimeout(resolveMatches, ...)` with no
+ *   arguments, so it naturally defaults back to null here — a
+ *   gravity-caused cascade link has no "swap" to speak of, so it
+ *   always falls back to the old middle/intersection spawn rule (see
+ *   special_gem.js's classifyGroup()/pickSpawnCell()).
  * @returns {void}
  */
-function resolveMatches() {
+function resolveMatches(swapCells = null) {
   const matched = findMatches(grid);
 
   if (!hasAnyMatch(matched)) {
@@ -939,12 +1172,12 @@ function resolveMatches() {
 
   comboCount++;
 
-  const { clearedCells, spawns, matchedGroups, incidentalCells } = resolveSpecialGems(grid, matched);
+  const { clearedCells, spawns, matchedGroups, incidentalCells } = resolveSpecialGems(grid, matched, swapCells);
   applySpawns(spawns);
 
   const gained = calculateCascadeStepScore({ matchedGroups, incidentalCells, comboCount });
-  const comboMessage = comboCount > 1 ? `combo x${comboCount}! ${signed(gained)}` : signed(gained);
-  const leveledUp = applyScoreGain(gained, comboMessage);
+  const matchMessage = buildMatchMessage(matchedGroups, incidentalCells, comboCount, gained);
+  const leveledUp = applyScoreGain(gained, matchMessage);
 
   if (leveledUp) pendingLevelUp = true;
 
@@ -1044,22 +1277,170 @@ function showBoonDialog(onContinue) {
       renderSideStats();
       boonDialogEl.classList.add('hidden');
 
-      const isBoardShapeBoon =
-        def.effect.kind === 'board_expand' ||
-        def.effect.kind === 'board_shrink' ||
-        def.effect.kind === 'board_expand_and_shrink';
+      // NEW — record the pick in the History panel. Tone follows the
+      // boon's OWN type rather than trying to re-derive positive/
+      // negative from its numbers: a RISKY_BUFF (Frenzy, the 4 global
+      // boons) always carries BOTH an upside and a downside at once,
+      // so no single sign correctly describes it — those stay
+      // 'neutral'. CURSE (currently only the board-shrink boon) is a
+      // pure downside. Plain BUFF is a pure upside.
+      const boonTone = def.type === BOON_TYPE.CURSE ? 'negative'
+        : def.type === BOON_TYPE.BUFF ? 'positive'
+        : 'neutral';
+      // CHANGED — boon picks always use their own dedicated 'boon'
+      // tone/color now (violet), instead of borrowing score's
+      // green/red off BOON_TYPE. Reusing green/red made a buff pick
+      // visually indistinguishable from a plain positive score line —
+      // the boon's own name/description already say buff-vs-curse;
+      // the color now just marks "this line is a boon pick," free or
+      // bought alike (see buyBoonFromShop() below).
+      addHistoryEntry('boon', `Boon picked: ${def.name} — ${def.description}`, 'boon');
+      renderHistoryPanel();
 
-      if (isBoardShapeBoon) {
-        startTilePlacement(def, onContinue);
-      } else {
-        onContinue();
-      }
+      proceedAfterBoonPick(def, onContinue);
     });
 
     boonChoicesEl.appendChild(card);
   });
 
   boonDialogEl.classList.remove('hidden');
+}
+
+/**
+ * Decides what happens immediately after a FREE level-up boon has
+ * been picked and applied: open the shop (if the level just cleared
+ * is a multiple of SHOP_LEVEL_INTERVAL), then — either way — run
+ * whatever board-shape placement or cascade-resume step was already
+ * queued up behind the boon pick.
+ *
+ * Order: free pick always happens first, the shop (if any) opens
+ * second, and any board-shape placement for THIS boon runs last,
+ * once the shop is closed.
+ *
+ * @param {object} def - the boon just picked (from the free dialog).
+ * @param {() => void} onContinue - what resolveMatches()'s deferred
+ *   level-up flow is ultimately waiting to run once everything is done.
+ * @returns {void}
+ */
+function proceedAfterBoonPick(def, onContinue) {
+  const isBoardShapeBoon =
+    def.effect.kind === 'board_expand' ||
+    def.effect.kind === 'board_shrink' ||
+    def.effect.kind === 'board_expand_and_shrink';
+
+  const afterShop = () => {
+    if (isBoardShapeBoon) {
+      startTilePlacement(def, onContinue);
+    } else {
+      onContinue();
+    }
+  };
+
+  // progressionState.level has ALREADY advanced (advanceLevel() runs
+  // inside applyScoreGain(), well before the boon dialog opens) — so
+  // "the level that was just cleared" is level - 1, not the current
+  // level. shouldOpenShop() checks THAT cleared level against the
+  // every-5 cadence.
+  const levelJustCleared = progressionState.level - 1;
+  if (shouldOpenShop(levelJustCleared)) {
+    openShopDialog(afterShop);
+  } else {
+    afterShop();
+  }
+}
+
+/**
+ * Opens the boon shop: rolls a fresh offer and shows the dialog.
+ * Stashes `onContinue` so Leave can resume whatever was paused.
+ *
+ * @param {() => void} onContinue
+ * @returns {void}
+ */
+function openShopDialog(onContinue) {
+  currentShopTier = shopTierForLevel(progressionState.level - 1);
+  rollBoonShopOffer();
+  shopContinuation = onContinue;
+  renderShopDialog();
+  shopDialogEl.classList.remove('hidden');
+}
+
+/**
+ * Rebuilds the shop's card grid from boonShopState.offer, from
+ * scratch, every time — same "just rebuild it" convention as
+ * renderSideStats()/renderHistoryPanel(). Called on open and again
+ * after every purchase (price never changes mid-visit, but a card's
+ * bought/affordable state does).
+ *
+ * @returns {void}
+ */
+function renderShopDialog() {
+  shopSubtitleEl.textContent = `Your score: ${score}`;
+  shopChoicesEl.innerHTML = '';
+
+  boonShopState.offer.forEach(def => {
+    const price = calculateBoonPrice(def.rarity, currentShopTier);
+    const alreadyBought = isBoonPurchasedThisVisit(def.id);
+    const canAfford = score >= price;
+
+    const card = document.createElement('div');
+    card.className = 'shop-card';
+    if (alreadyBought) card.classList.add('shop-card--bought');
+    else if (!canAfford) card.classList.add('shop-card--unaffordable');
+
+    const gemDef = def.effect?.gem ? ALL_GEM_CATALOG.find(g => g.id === def.effect.gem) : null;
+    const iconHtml = gemDef
+      ? `<img class="boon-card-gem-icon" src="css/model/svg/${gemDef.file}" alt="${gemDef.name}">`
+      : '';
+
+    card.innerHTML = `
+      <div class="boon-card-header">
+        ${iconHtml}
+        <h3>${def.name}</h3>
+      </div>
+      <p>${def.description}</p>
+      <div class="shop-card-price">${alreadyBought ? 'Purchased' : `${price} pts`}</div>
+    `;
+
+    // Only wire a click when the card is actually purchasable — an
+    // already-bought or too-expensive card is inert (styled via the
+    // classes above instead of a disabled-button affordance).
+    if (!alreadyBought && canAfford) {
+      card.addEventListener('click', () => buyBoonFromShop(def, price));
+    }
+
+    shopChoicesEl.appendChild(card);
+  });
+}
+
+/**
+ * Attempts to buy one boon from the current shop offer: deducts its
+ * price from score, then calls the EXACT same pickBoon()/
+ * applyBoonEffect() pair the free level-up dialog uses, so a bought
+ * boon counts against that boon's maxOccurrences cap exactly like a
+ * free one would.
+ *
+ * @param {object} def - the BOON_POOL entry being bought.
+ * @param {number} price - its price, exactly as shown on the card
+ *   (recomputed by the caller, not trusted from a stale click event).
+ * @returns {void}
+ */
+function buyBoonFromShop(def, price) {
+  if (score < price) return; // safety net — card shouldn't be clickable here at all
+
+  score -= price;
+  scoreEl.textContent = score;
+
+  pickBoon(def.id);
+  applyBoonEffect(def);
+  markBoonPurchased(def.id);
+
+  // Reuses the same 'boon' tone the free pick uses, so the log reads
+  // as one consistent timeline regardless of free-vs-bought.
+  addHistoryEntry('boon', `Bought from shop: ${def.name} (-${price}) — ${def.description}`, 'boon');
+  renderHistoryPanel();
+
+  renderSideStats();
+  renderShopDialog(); // reflect the new score + this card's bought state
 }
 
 /**
@@ -1140,6 +1521,12 @@ loseRestartBtn.addEventListener('click', () => {
 levelUpNextBtn.addEventListener('click', () => {
   levelUpDialogEl.classList.add('hidden');
   showBoonDialog(pendingContinuation);
+});
+shopLeaveBtn.addEventListener('click', () => {
+  shopDialogEl.classList.add('hidden');
+  const finish = shopContinuation;
+  shopContinuation = null;
+  if (finish) finish();
 });
 
 applyStaticText();

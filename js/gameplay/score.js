@@ -51,6 +51,27 @@ function frenzyAdjustmentFor(gemId) {
 }
 
 /**
+ * Total flat per-match adjustment a gem's OWN matches currently
+ * carry: its Affinity bonus (if any) plus every active Frenzy pick's
+ * contribution — that pick's bonus if `gemId` IS the Frenzy's target
+ * gem, or its penalty if `gemId` is any other gem.
+ *
+ * Exported so the side stats panel (main.js's renderSideStats()) can
+ * show the EXACT same number the scoring pipeline actually applies,
+ * instead of re-deriving (and risking drifting out of sync with)
+ * this math a second time. This was the root cause of Frenzy not
+ * showing up in the side panel before — it only ever read
+ * boonEffectState.affinityBonus directly, which Frenzy never writes
+ * to (Frenzy lives in boonEffectState.frenzyPicks instead).
+ *
+ * @param {string} gemId
+ * @returns {number}
+ */
+export function getMatchBonusForGem(gemId) {
+  return affinityBonusFor(gemId) + frenzyAdjustmentFor(gemId);
+}
+
+/**
  * Scores one cascade step (one resolveMatches() pass, or a Hypercube
  * activation treated as one oversized group).
  *
@@ -73,9 +94,17 @@ export function calculateCascadeStepScore({ matchedGroups, incidentalCells, comb
     frenzyTotal += frenzyAdjustmentFor(gemId);
   }
 
-  // blast-chained cells aren't a formed match — one flat gem value each
+  // Blast-chained cells aren't a formed match — one flat gem value
+  // each, same as before. NEW: they now also pull their own
+  // Affinity/Frenzy contribution, same as a formed match would — an
+  // exploded gem is still THAT gem being cleared off the board, so
+  // it shouldn't lose out on boons scoped to it just because a
+  // laser/discharger did the clearing instead of a direct match.
   for (const cell of incidentalCells) {
-    rawScore += getGemBaseValue(gemIdForType(cell.gemType));
+    const gemId = gemIdForType(cell.gemType);
+    rawScore += getGemBaseValue(gemId);
+    affinityTotal += affinityBonusFor(gemId);
+    frenzyTotal += frenzyAdjustmentFor(gemId);
   }
 
   const comboScaled = rawScore * getComboMultiplier(comboCount);
