@@ -17,7 +17,7 @@ import { boonEffectState } from '../resources/boon/boon_effect_state.js';
  * UPDATED THIS ROUND — no longer cumulative (previous-target-based).
  * Now a direct, standalone formula per level:
  *
- *   target(level) = ROUND(2000 x 1.35^(level-1)) x level
+ *   target(level) = ROUND(2000 x 1.25^(level-1)) x level
  *                    + 500 x 1.5^level
  *
  * Only the FIRST term is rounded before the x level multiply — same
@@ -42,7 +42,7 @@ import { boonEffectState } from '../resources/boon/boon_effect_state.js';
 export function calculateScoreTarget(level) {
   if ( level <= 1) return 2000; // level 1 is always 2000, no multiplier applied yet
 
-  const scaledTerm = Math.round(2000 * Math.pow(1.35, level - 1)) * level;
+  const scaledTerm = Math.round(2000 * Math.pow(1.25, level - 1)) * level;
   const flatGrowthTerm = 500 * Math.pow(1.5, level);
   const raw = scaledTerm + flatGrowthTerm;
   return Math.round(raw * boonEffectState.targetScoreMultiplier);

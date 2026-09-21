@@ -1,12 +1,32 @@
-1. Click and drag.
-2. When the game ends, prompt a game over dialogue.
-3. In the boon card, add the gem image next the name for easier visualization.
-=> Same thing for the Gem Stats, on top of the match.
-4. Level one target score to be 1000.
+1. Click and drag. (Done and Tested)
+2. When the game ends, prompt a game over dialogue. (Done and Tested)
+
+3. In the boon card, add the gem image next the name (Changed to title instead) for easier visualization. (Done and Tested)
+=> Same thing for the Gem Stats, on top of the match. (Done but it is next to the match, not on top)
+=> Make the stat slightly a bit bigger to see
+
+4. Level one target score to be 2000.  (Done and Tested)
+
 5. Special gems calculation double check.
-6. When the target score is reached, finish scoring + cascade first then show boon screen.
-7. You gain gold by buying using score (score scaling) or sacrifice a boon (set amount of gold, gold gained will be based on rarirty).
-8. Next step is shop feature. Show boons as item instead of artifact, relics and fossil. Only about 4 boons, score price will scale with levels.
-9. Event feature > challenge > double or nothing. Chance based appearance. Only start after level 4.
-10. Implement diagonal movement  (only in the shop or event, and it costs all of your score).
-11. Curse that spawns dead block (1 deadblocks, immediately) showing up or new gems (like only 5% for appearance) to mess with the board. dead block can only be remove by moving it to the bottom.
+
+
+
+6. When the target score is reached, finish scoring + cascade first then show boon screen.  (Done and Tested)
+
+
+
+7. Hint (Done and Tested)
+8. Bombs special gems (Done)
+
+
+
+
+
+
+9. You gain gold by buying using score (score scaling) or sacrifice a boon (set amount of gold, gold gained will be based on rarirty).
+10. Next step is shop feature. Show boons as item instead of artifact, relics and fossil. Only about 4 boons, score price will scale with levels.
+11. Event feature > challenge > double or nothing. Chance based appearance. Only start after level 4.
+12. Implement diagonal movement  (only in the shop or event, and it costs all of your score).
+13. Curse that spawns dead block (1 deadblocks, immediately) showing up or new gems (like only 5% for appearance) to mess with the board. dead block can only be remove by moving it to the bottom.
+14. Add a version
+15. Gamble boon, double or nothing. Either repeatedly or one chance

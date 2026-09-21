@@ -1,0 +1,37 @@
+Patch Note 2026/09/21
+
+1. Add click and drag feature.
+2. A gameover dialogue now will be prompted when there is no more moves available.
+3. Added the gem image next to the boon title for the time being. In the future, we will put it inline with descriptions once the effects are finalized and the boon card design are settled. Currently, it would be too messy to implement and very hard to read clustered text.
+4. Added gem images to the Gem Stats screen. The image is now shown next to the name. Image + Gem name. Sticking with this format in order to be consistent throughout the game.
+5. Changed level one target score to be 2000.
+6. Level up screen will now appeared after the cascade combo is finished. Previously, cascade combo was paused the moment the target scored is reached.
+7. Added hint features. After 10 seconds of not making any matches, a pulsing golden glow on a cell that's part of a legal move the player hasn't found.
+8. Updated Hyperspace special gem
+
+- Hyperspace is now named as Discharger.
+
+- Matched normally (part of a formed match, or hit by a
+  chain-reaction blast) -> clears a 3x3 area centered on itself.
+  This REPLACES the old row+column+diagonals burst as the
+  passive on-match effect.
+
+- Swapped with a Laser Beam -> clears 3 full rows (if the laser
+  was a LASER_ROW) or 3 full columns (if LASER_COL), centered on
+  wherever the Discharger itself ends up after the swap — instead
+  of the laser's usual single row/column.
+
+- Swapped with another Discharger -> the OLD row+column+diagonals
+  burst, centered on the swap's destination cell. (i.e. the
+  original Star Gem behavior now lives here, swap-exclusive.)
+
+- Swapped with a Hyperspace Star -> mirrors the Hyperstar+Laser
+  combo: converts every gem of the Discharger's color into a
+  Discharger and detonates them all (each with its own 3x3).
+
+9. Changed the target score forumla.
+From
+Target Score = ROUND(2000 * (1.35 ^ (Level-1))) * Level + 500 * Pow(1.5, Level)
+
+To
+Target Score = ROUND(2000 * (1.25 ^ (Level-1))) * Level + 500 * Pow(1.5, Level)

@@ -183,6 +183,41 @@ export function hasPossibleMove(g) {
 }
 
 /**
+ * NEW — finds a legal swap the player could make right now. Same
+ * brute-force approach as hasPossibleMove() (try every adjacent swap
+ * on a scratch copy and see if it creates a match), but instead of
+ * stopping at the first true/false answer, collects EVERY legal swap
+ * found and returns one at random — so repeated hints across a run
+ * don't always land on the exact same pair. Used by main.js's hint
+ * feature (see showHintNow()), not by any core gameplay logic.
+ *
+ * @param {number[][]} g - the grid to search.
+ * @returns {{ from: [number, number], to: [number, number] } | null}
+ *   one legal swap's two cells, or null if no legal move exists at
+ *   all (the stuck-board case — handled separately, by
+ *   checkEndState()'s game-over path, not by this function).
+ */
+export function findHintMove(g) {
+  const legalMoves = [];
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      if (g[r][c] === BLOCKED) continue;
+      for (const [dr, dc] of [[0, 1], [1, 0]]) {
+        const nr = r + dr, nc = c + dc;
+        if (!inBounds(nr, nc) || g[nr][nc] === BLOCKED) continue;
+        const clone = g.map(row => row.slice());
+        [clone[r][c], clone[nr][nc]] = [clone[nr][nc], clone[r][c]];
+        if (hasAnyMatch(findMatches(clone))) {
+          legalMoves.push({ from: [r, c], to: [nr, nc] });
+        }
+      }
+    }
+  }
+  if (legalMoves.length === 0) return null;
+  return legalMoves[Math.floor(Math.random() * legalMoves.length)];
+}
+
+/**
  * Swaps two cells in place on the given grid.
  *
  * @param {number[][]} grid - the grid to mutate.

@@ -109,3 +109,28 @@
   font-size: 0.76rem;
   color: var(--paper-dim);
 }
+
+/* NEW — small gem icon next to a boon card's title, so the player
+   can tell at a glance which gem a per-gem boon (Affinity/Bounty/
+   Frenzy/etc.) affects without parsing the description text. Global
+   boons (no effect.gem) just don't get one — main.js skips the
+   <img> entirely for those. */
+.boon-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+/* Overrides .boon-card h3's own margin-bottom (same specificity,
+   later in the file wins) — the header div now owns that spacing. */
+.boon-card-header h3 {
+  margin: 0;
+}
+
+.boon-card-gem-icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  object-fit: contain;
+}

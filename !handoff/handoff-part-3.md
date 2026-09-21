@@ -4,7 +4,7 @@ This is a continuation of `handoff-part-2.md`. Scope: a bundle of bugfixes
 found during playtesting, a new left-side stats panel, a full rework of
 the special-gem system (directional Laser Beams + a Hyperspace Star with
 three swap combos), a relocated score popup, and several rounds of tuning
-on the Lust boon and the target-score formula (ending on a final formula
+on the Lush boon and the target-score formula (ending on a final formula
 below — earlier formulas tried this session are listed in the changelog
 for context, not left active in code).
 
@@ -150,9 +150,9 @@ legendary .02.
 
 ---
 
-## 8. Lust boon tuned down
+## 8. Lush boon tuned down
 
-`othersPenalty` on the Lust archetype (`resources/boon/boon.js`) reduced
+`othersPenalty` on the Lush archetype (`resources/boon/boon.js`) reduced
 from **-10 to -5** (description text updated to match) — -10 played too
 strong. `effect.amount` (+150 to the chosen gem) is unchanged.
 
@@ -165,13 +165,13 @@ below for the ones that were superseded). **Current, active formula** in
 `gameplay/progression.js`'s `calculateScoreTarget(level)`:
 
 ```
-target(level) = ROUND(2000 x 1.35^(level-1)) x level + 500 x 1.5^level
+target(level) = ROUND(2000 x 1.25^(level-1)) x level + 500 x 1.5^level
 ```
 
 - This is a **direct, standalone** formula per level — **not**
   cumulative, does **not** depend on `target(level-1)`. No loop needed;
   it's a single calculation.
-- Only the first term (`2000 x 1.35^(level-1)`) is rounded before its
+- Only the first term (`2000 x 1.25^(level-1)`) is rounded before its
   `x level` multiply, matching the formula as given. The second term
   (`500 x 1.5^level`) is not separately rounded; the combined total is
   rounded once at the very end.
@@ -185,7 +185,7 @@ target(level) = ROUND(2000 x 1.35^(level-1)) x level + 500 x 1.5^level
 
 ```js
 export function calculateScoreTarget(level) {
-  const scaledTerm = Math.round(2000 * Math.pow(1.35, level - 1)) * level;
+  const scaledTerm = Math.round(2000 * Math.pow(1.25, level - 1)) * level;
   const flatGrowthTerm = 500 * Math.pow(1.5, level);
   const raw = scaledTerm + flatGrowthTerm;
   return Math.round(raw * boonEffectState.targetScoreMultiplier);
@@ -194,11 +194,11 @@ export function calculateScoreTarget(level) {
 
 ### Changelog of formulas tried this session (superseded, for context only)
 
-1. `ROUND(2000 x 1.35^(level-1))` — cumulative (`target(level) =
+1. `ROUND(2000 x 1.25^(level-1))` — cumulative (`target(level) =
    target(level-1) + increment(level)`), implemented as a loop.
-2. `ROUND(2000 x 1.35^(level-1)) x level` — still cumulative, increment
+2. `ROUND(2000 x 1.25^(level-1)) x level` — still cumulative, increment
    now scaled by `level`, still a loop.
-3. **(current)** `ROUND(2000 x 1.35^(level-1)) x level + 500 x
+3. **(current)** `ROUND(2000 x 1.25^(level-1)) x level + 500 x
    1.5^level` — no longer cumulative, direct per-level formula, loop
    removed.
 
@@ -230,6 +230,6 @@ above is active.
   `triggerHyperstarDouble()`, `triggerLaserCombo()`.
 - `gems.css` — laser arrow styles, hyperstar star-shape styles.
 - `boon.js` (resources) — `BOON_RARITY.UNCOMMON` added, weights
-  re-split, Lust `othersPenalty`/description changed to -5.
+  re-split, Lush `othersPenalty`/description changed to -5.
 - `progression.js` (gameplay) — `calculateScoreTarget()` rewritten
   (final version: direct formula, no loop).

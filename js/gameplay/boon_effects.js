@@ -49,7 +49,7 @@ export function applyBoonEffect(def) {
       gemBaseState.perGem[effect.gem].multiplierBonus += effect.amount;
       break;
 
-    case 'gem_score_lust':
+    case 'gem_score_lush':
       gemBaseState.perGem[effect.gem].scoreBonus += effect.amount;
       // penalty hits every OTHER gem, including ones not unlocked yet
       ALL_GEM_IDS.forEach(id => {

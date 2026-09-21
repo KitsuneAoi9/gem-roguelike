@@ -14,10 +14,18 @@
 // grid is SIZE x SIZE" now reads the ACTUAL rendered rectangle's
 // origin and width off boardEl.dataset, which renderBoard() stashes
 // there every time it redraws.
+//
+// NEW THIS ROUND — drag-to-swap: a gem cell now supports BOTH
+// tap-to-select (the original click-then-click-adjacent flow) AND
+// press-and-drag toward a neighbor. Both live together in
+// wireCellInteraction() below, built on the Pointer Events API so
+// mouse/touch/pen all get the same behavior without separate code
+// paths. Blocked/ghost cells (no gem to drag) keep the old plain
+// click listener.
 // ============================================================
 
 import { SIZE, BLOCKED, getActiveBounds } from './board.js';
-import { GEM_DEFINITIONS } from '../resources/constant/constants.js';
+import { GEM_DEFINITIONS, DRAG_SWAP_THRESHOLD_PX } from '../resources/constant/constants.js';
 import { tileState  } from '../resources/tile/tile_state.js';
 import { specialGemState } from '../resources/special%20gem/special_gem_state.js';
 
@@ -47,6 +55,95 @@ function cellIndex(boardEl, row, col) {
 }
 
 /**
+ * Wires up ONE gem cell's pointer interactions: plain tap/click
+ * (calls onCellClick) AND press-and-drag toward a neighbor (calls
+ * onCellSwap once the drag clears DRAG_SWAP_THRESHOLD_PX). Both are
+ * decided from the same Pointer Events listeners rather than the
+ * click event separately, on purpose — see the note below.
+ *
+ * Deliberately does NOT use the browser's native 'click' event to
+ * detect "was this a tap." After a drag gesture, exactly where (and
+ * whether) a synthetic click fires is inconsistent enough across
+ * browsers/devices that it's simpler and more predictable to track
+ * press-vs-drag ourselves and decide on pointerup.
+ *
+ * Only ever called for a non-BLOCKED cell (see renderBoard() below) —
+ * there's nothing meaningful to drag on a blocked/ghost cell.
+ *
+ * @param {HTMLElement} cell - the cell's DOM element, already built.
+ * @param {number} row - absolute board row this cell represents.
+ * @param {number} col - absolute board col this cell represents.
+ * @param {(r: number, c: number) => void} onCellClick
+ * @param {((r1: number, c1: number, r2: number, c2: number) => void) | undefined} onCellSwap -
+ *   if omitted, drag is simply never wired (tap-to-click still works)
+ *   — keeps this function safe to call even from a render path that
+ *   doesn't have a swap handler to give it.
+ * @returns {void}
+ */
+function wireCellInteraction(cell, row, col, onCellClick, onCellSwap) {
+  // Per-cell drag state, captured in this closure — each cell gets
+  // its own independent little state machine, reset every gesture.
+  let startX = 0;
+  let startY = 0;
+  let dragFired = false;   // true once THIS gesture has already fired a swap
+  let pointerId = null;    // the pointer currently pressed on this cell, if any
+
+  cell.addEventListener('pointerdown', (e) => {
+    if (e.button !== undefined && e.button !== 0) return; // ignore right/middle-click drags
+    pointerId = e.pointerId;
+    startX = e.clientX;
+    startY = e.clientY;
+    dragFired = false;
+    // Pointer capture keeps every subsequent pointermove/pointerup
+    // for THIS gesture targeting this cell, even once the pointer
+    // physically moves over a neighboring cell mid-drag — without
+    // this, a fast drag would "leave" the starting cell's listeners
+    // and we'd lose track of the gesture partway through.
+    cell.setPointerCapture(pointerId);
+  });
+
+  cell.addEventListener('pointermove', (e) => {
+    if (pointerId === null || dragFired || !onCellSwap) return;
+
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    // Still within the "could just be a careful tap" zone — wait.
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < DRAG_SWAP_THRESHOLD_PX) return;
+
+    // Whichever axis moved further decides the swap direction — a
+    // mostly-horizontal drag swaps left/right, a mostly-vertical one
+    // swaps up/down. A diagonal drag just picks whichever won; there's
+    // no diagonal swap in this game.
+    let targetRow = row;
+    let targetCol = col;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      targetCol = col + (dx > 0 ? 1 : -1);
+    } else {
+      targetRow = row + (dy > 0 ? 1 : -1);
+    }
+
+    dragFired = true; // only ever fire once per press, even if the pointer keeps moving further
+    onCellSwap(row, col, targetRow, targetCol);
+  });
+
+  cell.addEventListener('pointerup', (e) => {
+    if (pointerId !== null) cell.releasePointerCapture(pointerId);
+    // No drag was fired this gesture — that means the pointer never
+    // traveled past the threshold, so treat it as a plain tap/click.
+    if (!dragFired) onCellClick(row, col);
+    pointerId = null;
+    dragFired = false;
+  });
+
+  cell.addEventListener('pointercancel', () => {
+    // Gesture got interrupted (e.g. the browser took over for a
+    // system gesture) — just reset, don't fire a click OR a swap.
+    pointerId = null;
+    dragFired = false;
+  });
+}
+
+/**
  * Rebuilds the #board element from scratch based on the current grid.
  *
  * Only draws the smallest rectangle containing every usable cell
@@ -60,16 +157,21 @@ function cellIndex(boardEl, row, col) {
  * @param {HTMLElement} boardEl - the #board container element.
  * @param {number[][]} grid - the current grid of gem type numbers.
  * @param {(r: number, c: number) => void} onCellClick - called with a
- *   cell's row/col whenever that cell is clicked.
+ *   cell's row/col whenever that cell is tapped/clicked (not dragged).
  * @param {object} [options]
  * @param {[number, number][]} [options.ghostCells] - BLOCKED cells to
  *   render as clickable "extend here" targets instead of the normal
  *   greyed-out look, and to include in the drawn rectangle even
  *   though they're outside the usable area.
+ * @param {(r1: number, c1: number, r2: number, c2: number) => void} [options.onCellSwap] -
+ *   called when a press-and-drag gesture on a gem cell resolves into
+ *   a swap attempt toward a neighboring cell (see wireCellInteraction()
+ *   above). Omit to render gem cells with tap-only interaction — no
+ *   drag wired at all.
  * @returns {void}
  */
 export function renderBoard(boardEl, grid, onCellClick, options = {}) {
-  const { ghostCells = [] } = options;
+  const { ghostCells = [], onCellSwap } = options;
   boardEl.innerHTML = '';
 
   // Start from the rectangle that actually contains gameplay, then
@@ -132,6 +234,11 @@ export function renderBoard(boardEl, grid, onCellClick, options = {}) {
         } else {
           cell.classList.add('cell--blocked');
         }
+        // Blocked/ghost cells never have a gem to drag — plain
+        // click only. This is also what lets a ghost cell anchor a
+        // board-expand placement via onCellClick, same as before
+        // drag-to-swap existed.
+        cell.addEventListener('click', () => onCellClick(row, col));
       } else {
         if (tileCellKeys.has(key)) {
           cell.classList.add('cell--tile');
@@ -154,13 +261,14 @@ export function renderBoard(boardEl, grid, onCellClick, options = {}) {
           gem.classList.add('gem--special', `gem--${specialType.replace(/_/g, '-')}`);
         }
         cell.appendChild(gem);
+
+        // A real gem cell gets BOTH interaction modes wired together
+        // — tap-to-select AND press-and-drag — so they can't race
+        // each other (see wireCellInteraction()'s doc comment for
+        // why this isn't just a separate 'click' listener anymore).
+        wireCellInteraction(cell, row, col, onCellClick, onCellSwap);
       }
 
-      // Every cell gets a click handler, ghost cells included — a
-      // ghost cell routes through the exact same onCellClick(row,col)
-      // as any other cell; main.js's placement-mode branch is what
-      // treats it differently, not this listener.
-      cell.addEventListener('click', () => onCellClick(row, col));
       boardEl.appendChild(cell);
     }
   }
@@ -278,4 +386,28 @@ export function markMatchedGems(boardEl, matched) {
       if (gem) gem.classList.add('matched');
     }
   }
+}
+
+/**
+ * NEW — highlights a legal swap for the player: adds a pulsing glow
+ * class to both cells of a hinted pair (see main.js's
+ * scheduleHintTimer()/showHintNow() and board.js's findHintMove()).
+ *
+ * Purely additive — doesn't touch .selected or anything else already
+ * on the cell — and needs no matching "clear" function: the next
+ * renderBoard() call (a swap, a cascade step, a reshuffle, a tile
+ * placement — anything that changes the board) wipes the whole DOM
+ * and rebuilds it from scratch, which naturally clears this class
+ * along with everything else. That's what makes "the hint disappears
+ * once the player acts" work for free.
+ *
+ * @param {HTMLElement} boardEl - the #board container element, already rendered.
+ * @param {[number, number][]} cells - the two [row, col] cells to highlight.
+ * @returns {void}
+ */
+export function showHintHighlight(boardEl, cells) {
+  cells.forEach(([r, c]) => {
+    const index = cellIndex(boardEl, r, c);
+    boardEl.children[index]?.classList.add('cell--hint');
+  });
 }

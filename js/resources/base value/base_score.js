@@ -5,7 +5,7 @@
 // DEFAULT_GEM_BASE_SCORE/MULTIPLIER are just the starting point —
 // each gem's ACTUAL base score/multiplier is this default plus its
 // deltas in gem_base_state.js (mutated by Bounty/Brilliance/Carat/
-// Lust/Enthusiast/Addict/Fanatic/Maniac boons). See gameplay/gem_base.js.
+// Lush/Enthusiast/Addict/Fanatic/Maniac boons). See gameplay/gem_base.js.
 //
 // Mirrors the scoring design table:
 //   Gem              base score 10,  multiplier 1.0x

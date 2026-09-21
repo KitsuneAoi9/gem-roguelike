@@ -91,7 +91,7 @@ export const FUTURE_GEM_DEFINITIONS = [
 
 // Full 11-gem roster (7 active + 4 future/locked) — used to build the
 // per-gem boon pool and to seed per-gem base-value state so locked
-// gems can still accumulate Lust/Maniac deltas before they're unlocked.
+// gems can still accumulate Lush/Maniac deltas before they're unlocked.
 export const ALL_GEM_CATALOG = [...GEM_DEFINITIONS, ...FUTURE_GEM_DEFINITIONS];
 export const ALL_GEM_IDS = ALL_GEM_CATALOG.map(g => g.id);
 
@@ -153,3 +153,29 @@ export const TILE_SHAPES = {
     ],
   },
 };
+
+// --- input (drag-to-swap) ---
+// Minimum pointer travel (px) before a press-and-move gesture counts
+// as a drag-swap instead of a plain click/tap. Keeps a small jitter
+// or a slow, careful tap from accidentally firing a swap — the
+// player has to actually flick toward a neighbor to trigger one.
+export const DRAG_SWAP_THRESHOLD_PX = 16;
+
+// --- stuck-board game over ---
+// How long the "no moves left" status message sits on screen before
+// the game-over dialog appears, once PREVENT_DEADLOCK is off and
+// hasPossibleMove() comes back false. Gives the player a beat to
+// read the board instead of the dialog slamming the screen the
+// instant the cascade settles.
+export const NO_MOVES_GAME_OVER_DELAY_MS = 2000;
+
+// --- hint (idle nudge) ---
+// How long the board can sit idle after the last real match/cascade
+// (including a swap-activated special-gem combo) before a legal move
+// gets highlighted for the player. Per design: does NOT reset on a
+// failed/invalid swap attempt or a plain click/select — only an
+// actual match restarts this clock. main.js's checkEndState() is the
+// only place that reschedules it, since every call to checkEndState()
+// is itself only ever reached as a consequence of a real match having
+// just resolved (see its doc comment).
+export const HINT_DELAY_MS = 10000;

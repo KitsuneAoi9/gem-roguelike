@@ -51,7 +51,7 @@
   animation: special-pulse 1.4s ease-in-out infinite;
 }
 
-.gem--star::after { box-shadow: 0 0 10px 3px rgba(224, 179, 74, 0.85); }
+.gem--discharger::after { box-shadow: 0 0 10px 3px rgba(224, 179, 74, 0.85); }
 
 @keyframes special-pulse {
   0%, 100% { opacity: 0.55; transform: scale(1); }

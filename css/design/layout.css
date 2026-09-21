@@ -108,6 +108,12 @@ body {
   cursor: pointer;
   position: relative;
   transition: transform 0.12s ease;
+  /* NEW — drag-to-swap needs pointer events to NOT trigger the
+     browser's own touch-scroll/text-selection gestures on a gem
+     cell, or a drag on mobile would scroll the page instead of
+     swapping. */
+  touch-action: none;
+  user-select: none;
 }
 
 /* #board's repeat(8, 46px) below is now only a fallback for the very
@@ -155,6 +161,19 @@ body {
 
 .cell--tile {
   box-shadow: inset 0 0 0 2px var(--gold);
+}
+
+/* NEW — hint highlight: a pulsing golden glow on a cell that's part
+   of a legal move the player hasn't found in a while (see main.js's
+   showHintNow()). Purely visual, same as .cell--tile — no
+   interaction implications. */
+.cell--hint {
+  animation: cell-hint-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes cell-hint-pulse {
+  0%, 100% { box-shadow: inset 0 0 0 2px var(--gold), 0 0 6px 1px rgba(224, 179, 74, 0.5); }
+  50%      { box-shadow: inset 0 0 0 2px var(--gold), 0 0 14px 4px rgba(224, 179, 74, 0.9); }
 }
 
 /* Outline shown on the currently-selected cell, drawn inward so it
@@ -297,6 +316,14 @@ button#reset:hover {
 
 .gem-stat-values .gem-stat-bonus {
   color: var(--gold);
+}
+
+.gem-stat-icon {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px; /* nudges it to sit on the same baseline as the text next to it */
+  margin-right: 3px;
+  object-fit: contain;
 }
 
 /* Small screens: the fixed panel would overlap the centered board —

@@ -21,6 +21,11 @@ export const BUTTONS = {
 // --- dialog titles ---
 export const DIALOG_TITLES = {
   LOSE: "Out of moves",
+  // NEW — stuck-board game over. This reuses the SAME dialog element
+  // as LOSE (see main.js's showNoMovesDialog()) — the two scenarios
+  // just set different title/message text at show-time rather than
+  // getting their own separate dialog markup.
+  NO_MOVES: "Game Over",
   LEVEL_UP: "Level Cleared!",
   BOON: "Choose a Boon",
 };
@@ -31,6 +36,10 @@ export const MESSAGES = {
   INVALID_SWAP: 'no match there — try another pair',
   RESHUFFLING: 'no moves left on the board — reshuffling',
   STUCK_BOARD: 'no moves left on the board',
+  // NEW — body text for the stuck-board game-over dialog. Shown after
+  // STUCK_BOARD has sat in the #message line for
+  // NO_MOVES_GAME_OVER_DELAY_MS (constants.js).
+  NO_MOVES_GAME_OVER: 'no more valid moves remain on the board',
   // NEW — board expand/shrink placement errors. The "which shape /
   // which action" part of the message DOES interpolate a runtime
   // value (the shape's label), so that half stays as a template
