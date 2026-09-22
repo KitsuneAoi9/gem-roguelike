@@ -37,12 +37,13 @@ const PLACEMENT_ONLY_KINDS = new Set(['board_expand', 'board_shrink', 'board_exp
  *
  * @param {string} rarity - a BOON_RARITY value.
  * @param {number} tier - which shop visit this is (1-based).
+ * @param {number} score - the player's current score.
  * @returns {number} whole-number score cost.
  */
-export function calculateBoonPrice(rarity, tier) {
+export function calculateBoonPrice(rarity, tier, score) {
   const rarityMultiplier = BOON_SHOP_RARITY_MULTIPLIER[rarity] ?? 1.0;
   const inflation = Math.pow(1 + INFLATION_RATE_PER_TIER, tier - 1);
-  return Math.round(BASE_BOON_PRICE * rarityMultiplier * inflation * BASE_PRICE_MULTIPLIER);
+  return Math.round(BASE_BOON_PRICE * rarityMultiplier * inflation * BASE_PRICE_MULTIPLIER) + Math.round(score * rarityMultiplier);
 }
 
 /**

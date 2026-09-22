@@ -6,8 +6,9 @@
 // and filters out gem-scoped boons for locked gems (gemUnlockState).
 // ============================================================
 
-import { BOON_POOL, BOON_RARITY_WEIGHTS } from '../resources/boon/boon.js';
+import { BOON_POOL, BOON_RARITY_WEIGHTS, BOON_RARITY } from '../resources/boon/boon.js';
 import { boonState } from '../resources/boon/boon_state.js';
+import { LEGENDARY_UNLOCK_LEVEL } from '../resources/constant/constants.js';
 import { gemUnlockState } from '../resources/gem/gem_unlock_state.js';
 import { progressionState } from '../resources/progression/progression.js';
 
@@ -15,9 +16,17 @@ function timesPicked(boonId) {
   return boonState.activeBoons.filter(b => b.id === boonId).length;
 }
 
-/** Respects the pick cap AND, for gem-scoped boons, whether that gem is unlocked. */
+/** Respects the pick cap, gem-unlock status, AND the Legendary level gate. */
 function isBoonAvailable(def) {
   if (def.effect?.gem && !gemUnlockState.unlocked[def.effect.gem]) return false;
+  // NEW — Legendary boons are withheld entirely until the player has
+  // reached LEGENDARY_UNLOCK_LEVEL. Every other rarity is unaffected
+  // — only this one tier has a level floor. Since BOTH offer
+  // generators (the free dialog's rarity-weighted roll AND the
+  // shop's equal-weight roll) filter their candidate pool through
+  // THIS function, this one check is enough to keep Legendary out of
+  // both places — no separate shop-side check needed.
+  if (def.rarity === BOON_RARITY.LEGENDARY && progressionState.level < LEGENDARY_UNLOCK_LEVEL) return false;
   if (def.maxOccurrences == null) return true;
   return timesPicked(def.id) < def.maxOccurrences;
 }

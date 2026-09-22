@@ -179,3 +179,12 @@ export const NO_MOVES_GAME_OVER_DELAY_MS = 2000;
 // is itself only ever reached as a consequence of a real match having
 // just resolved (see its doc comment).
 export const HINT_DELAY_MS = 10000;
+
+// --- boon rarity gating ---
+// Legendary-rarity boons never appear in any offer — free level-up
+// dialog OR the shop — until the player has reached this level.
+// Checked in gameplay/boon.js's isBoonAvailable(), which both offer
+// generators (generateBoonOffer() and generateEqualWeightBoonOffer())
+// already filter through, so gating it there covers both places at
+// once.
+export const LEGENDARY_UNLOCK_LEVEL = 6;

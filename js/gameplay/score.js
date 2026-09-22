@@ -42,10 +42,28 @@ function affinityBonusFor(gemId) {
   return boonEffectState.affinityBonus[gemId] || 0;
 }
 
+/**
+ * Total flat per-match penalty/bonus a Frenzy-type pick contributes
+ * for `gemId`. CHANGED THIS ROUND — a Frenzy pick used to penalize
+ * EVERY gem other than its target; now each pick only ever affects
+ * its own target gem (bonus) plus exactly the two specific random
+ * gems chosen for it at pick time (`pick.penalizedGems`, set once in
+ * boon_effects.js's applyBoonEffect() and never re-rolled). Any gem
+ * that's neither the target nor in that pick's penalizedGems list is
+ * completely unaffected by that particular Frenzy pick.
+ *
+ * @param {string} gemId
+ * @returns {number}
+ */
 function frenzyAdjustmentFor(gemId) {
   let total = 0;
   for (const pick of boonEffectState.frenzyPicks) {
-    total += pick.gemId === gemId ? pick.bonus : pick.penalty;
+    if (pick.gemId === gemId) {
+      total += pick.bonus;
+    } else if (pick.penalizedGems && pick.penalizedGems.includes(gemId)) {
+      total += pick.penalty;
+    }
+    // else: this specific Frenzy pick doesn't touch gemId at all.
   }
   return total;
 }

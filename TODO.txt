@@ -1,22 +1,3 @@
-1. Click and drag. (Done and Tested)
-2. When the game ends, prompt a game over dialogue. (Done and Tested)
-
-3. In the boon card, add the gem image next the name (Changed to title instead) for easier visualization. (Done and Tested)
-=> Same thing for the Gem Stats, on top of the match. (Done but it is next to the match, not on top)
-=> Make the stat slightly a bit bigger to see
-
-4. Level one target score to be 2000.  (Done and Tested)
-
-5. Special gems calculation double check. (Done?)
-
-
-
-6. When the target score is reached, finish scoring + cascade first then show boon screen.  (Done and Tested)
-
-
-
-7. Hint (Done and Tested)
-8. Bombs special gems (Done and tested)
 
 
 9. You gain gold by buying using score (score scaling) or sacrifice a boon (set amount of gold, gold gained will be based on rarirty).
@@ -30,4 +11,76 @@
 
 
 
+
+17. Update boon + boon card design
+
+// Claude is done
+18. Update Rarity opdds - > Common: 50% | Uncommon: 25% | Rare: 15% | Epic: 8% | Legendary: 2% (Increased by Luck stat).
+19. Legendary won't appear until level 6 (including shops)
 16. Star is still being treated as gems.
+
+
+
+I need you to help me change the boon as follows:
+
+A. Series type
+
+Each series will have all 11 types of gems corresponding to it.
+For example: Affinity series - [Gem] Affinity
+Amethyst Affinity
+Diamond Affinity
+Emerald Affinity
+Garnet Affinity
+Ruby Affinity
+Sapphire Affinity
+Topaz Affinity
+Onyx Affinity
+Aquamarine Affinity
+Bloodstone Affinity
+Pearl Affinity
+
+Series      Description	                                Type	    Rarity	    Max Occurrences
+Affinity    Matching [gem] grants +100 bonus score. 	BUFF	    COMMON	    1
+
+Frenzy      [gem] matches gain +200 bonus score,        RISKY_BUFF	UNCOMMON	1
+            but [two other random gems] matches lose 
+            -50 bonus score.
+
+Polish	    Increase [gem] base score value by +5 and	BUFF	    COMMON	    Unlimited
+            multiplier value by +0.1.
+
+Bounty	    Increase the base score value of [gem]      BUFF	    UNCOMMON	2
+            by +20.	
+
+Brilliance	Increase the base score value of [gem]	    RISKY_BUFF	RARE	    3
+            by +50, but decrease [another random gem]
+            and [another random gem] base score value
+            of by -10.
+
+Lush	    Increase the base score value of [gem]      RISKY_BUFF	EPIC	    2
+            by +250, but decrease the base score value
+            of non-[gem] gems by -10.
+
+Grandeur	Increase the base score value of [gem]      BUFF	    LEGENDARY	1
+            by +500.
+
+Enthusiast	Increase the base multiplier value of       BUFF	    COMMON	    2
+            [gem] by +0.5.
+
+Addict	    Increase the base multiplier value of       RISKY_BUFF	RARE	    2
+            [gem] by +2.0, but decrease
+            [another random gem] and 
+            [another random gem] base multiplier 
+            value of by -0.5.
+
+Maniac	    Increase the base multiplier value of       BUFF	    EPIC	    2
+            [gem] by +2.5.	
+
+Fanatic	    Increase the base multiplier value of       BUFF	    LEGENDARY	1
+            [gem] by +15.0.	
+
+
+B. Non-series type
+Name        Description	                                        Type	    Rarity	    Max Occurrences
+Jeweler	    Increase all gem base score value by +25.	        BUFF	    EPIC	    2
+Gemologist	Increase all gem base multiplier value by +1.5	    BUFF	    LEGENDARY	2

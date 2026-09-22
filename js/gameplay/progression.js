@@ -14,28 +14,34 @@ import { boonEffectState } from '../resources/boon/boon_effect_state.js';
 /**
  * Score needed to clear a given level.
  *
- * UPDATED THIS ROUND — new formula per the latest design sheet:
+ * UPDATED THIS ROUND — milestone scaling added on top of the Part 4
+ * formula. New formula:
  *
- *   target(level) = ROUND(1000 x 1.15^(level-1)) x level
- *                    + 500 x 1.05^level
+ *   base(level)      = ROUND(1000 x 1.15^(level-1)) x level + 500 x 1.05^level
+ *   milestoneFactor   = 1.10 ^ FLOOR((level-1) / 5)
+ *   target(level)     = base(level) x milestoneFactor
  *
- * Only the FIRST term is rounded before its `x level` multiply — same
- * "round early" convention as the prior formula. The second term
- * (500 x 1.05^level) is not separately rounded; the whole expression
- * is rounded once at the very end.
+ * `milestoneFactor` is a STEP function, not a smooth curve — it
+ * stays flat at exactly 1.0 for levels 1-5 (FLOOR((level-1)/5) is 0
+ * for all of them), then jumps to a flat 1.10 for levels 6-10
+ * (FLOOR gives 1), then a flat 1.21 (1.10^2) for levels 11-15, and so
+ * on. Deliberately FLOOR, not a fractional exponent — every level
+ * WITHIN one 5-level band scores identically to every other level in
+ * that same band; the whole +10% jump lands all at once on the
+ * band's first level (6, 11, 16, ...), not smeared gradually across
+ * the 5 levels leading up to it. This is what makes it read as an
+ * actual "milestone" rather than a continuously-creeping curve.
  *
- * NOTE — this replaces the old special-cased "level 1 is always a
- * flat 2000, no formula" branch. The new formula is well-defined at
- * level 1 on its own (1000 x 1.15^0 x 1 + 500 x 1.05^1 = 1525), so
- * that hardcoded early-return has been removed — don't reintroduce
- * it, or level 1 will silently disagree with every other level's
- * curve.
+ * `base(level)` itself is unchanged from Part 4 — same two-term
+ * shape, same rounding convention (only the first term is rounded
+ * before its `x level` multiply; the combined total, INCLUDING the
+ * new milestone factor, is rounded once at the very end, after
+ * boonEffectState.targetScoreMultiplier is applied — same as every
+ * prior version of this formula).
  *
  * Still a PURE function of `level` alone — resetProgression()/
  * advanceLevel() can jump to any level with no dependency on having
- * calculated any other level first. The global targetScoreMultiplier
- * (Gemstone Gamble / Trinket Wager / Gem Greed / Jewel Avarice) is
- * still applied to the WHOLE result, same as before.
+ * calculated any other level first.
  *
  * @param {number} level - 1-based level number.
  * @returns {number} score target for that level.
@@ -43,7 +49,15 @@ import { boonEffectState } from '../resources/boon/boon_effect_state.js';
 export function calculateScoreTarget(level) {
   const scaledTerm = Math.round(1000 * Math.pow(1.15, level - 1)) * level;
   const flatGrowthTerm = 500 * Math.pow(1.05, level);
-  const raw = scaledTerm + flatGrowthTerm;
+  const base = scaledTerm + flatGrowthTerm;
+
+  // NEW — milestone scaling: a flat +10% step every 5 levels, applied
+  // on top of the base curve above. FLOOR (not a fractional exponent)
+  // is what keeps this a true step function — see doc comment.
+  const milestoneBand = Math.floor((level - 1) / 5);
+  const milestoneFactor = Math.pow(1.10, milestoneBand);
+
+  const raw = base * milestoneFactor;
   return Math.round(raw * boonEffectState.targetScoreMultiplier);
 }
 

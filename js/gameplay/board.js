@@ -107,17 +107,39 @@ function inBounds(row, col) {
  * and a column-match at once).
  *
  * @param {number[][]} g - the grid to scan.
+ * @param {(row: number, col: number) => boolean} [isExcluded] - NEW —
+ *   returns true for a cell that must NEVER be treated as part of a
+ *   run, even if its neighbors share its gemType, and can never
+ *   ANCHOR a run either (a run starting at an excluded cell is
+ *   immediately broken, length 1, regardless of what follows it).
+ *   This is how a cell currently holding a special gem gets carved
+ *   out of ordinary color-matching — passed in by the caller
+ *   (main.js) rather than read here, since board.js must stay
+ *   unaware that special gems exist at all (Rule 2/Rule 9). Defaults
+ *   to "nothing is excluded", reproducing the old always-matchable
+ *   behavior for any caller that doesn't care (e.g. a plain color
+ *   grid with no special-gem overlay to speak of).
  * @returns {boolean[][]} a SIZE x SIZE grid, true where that cell is matched.
  */
-export function findMatches(g) {
+export function findMatches(g, isExcluded = () => false) {
   const matched = Array.from({ length: SIZE }, () => Array(SIZE).fill(false));
   // --- horizontal runs ---
   for (let r = 0; r < SIZE; r++) {
     let runStart = 0;
     for (let c = 1; c <= SIZE; c++) {
-      // Extend the run while values keep matching (c === SIZE acts as
-      // a sentinel "end of row" to flush the final run).
-      if (c < SIZE && g[r][c] === g[r][runStart] && isGem(g[r][c])) continue;
+      // A run only extends into c when: c is in bounds, NEITHER c nor
+      // the run's own anchor (runStart) is excluded, the color
+      // matches, and it's an actual gem (not BLOCKED/-1). Checking
+      // runStart on every iteration (not just once) means an excluded
+      // cell can never anchor a run at all — it forces an immediate
+      // break the very next iteration, so it's never swept into
+      // anything, in either direction.
+      const extendsRun = c < SIZE
+        && !isExcluded(r, c)
+        && !isExcluded(r, runStart)
+        && g[r][c] === g[r][runStart]
+        && isGem(g[r][c]);
+      if (extendsRun) continue;
       const runLen = c - runStart;
       if (runLen >= 3) {
         for (let k = runStart; k < c; k++) matched[r][k] = true;
@@ -130,7 +152,12 @@ export function findMatches(g) {
   for (let c = 0; c < SIZE; c++) {
     let runStart = 0;
     for (let r = 1; r <= SIZE; r++) {
-      if (r < SIZE && g[r][c] === g[runStart][c] && isGem(g[r][c])) continue;
+      const extendsRun = r < SIZE
+        && !isExcluded(r, c)
+        && !isExcluded(runStart, c)
+        && g[r][c] === g[runStart][c]
+        && isGem(g[r][c]);
+      if (extendsRun) continue;
       const runLen = r - runStart;
       if (runLen >= 3) {
         for (let k = runStart; k < r; k++) matched[k][c] = true;
@@ -158,24 +185,47 @@ export function hasAnyMatch(matched) {
  * grid and see if any of them produces a match. Used to detect a
  * stuck board so we know when to reshuffle.
  *
- * NOTE: now scans the full SIZE x SIZE (20x20) allocated grid rather
- * than a fixed 8x8 — still cheap (a few thousand cell/clone checks
- * worst case) and correct as-is, since a BLOCKED cell is skipped
- * immediately below and never considered a swap partner.
- *
  * @param {number[][]} g - the grid to check.
+ * @param {(row: number, col: number) => boolean} [isExcluded] -
+ *   forwarded straight to findMatches() on each hypothetical clone —
+ *   see its doc comment. KNOWN SIMPLIFICATION: this predicate is
+ *   evaluated against CURRENT special-gem positions, not the
+ *   post-hypothetical-swap positions on the scratch clone (which
+ *   never touches specialGemState at all) — same category of
+ *   approximation as the existing "hasPossibleMove() doesn't account
+ *   for Hypercube activation" TODO from Part 1.
+ * @param {(r1: number, c1: number, r2: number, c2: number) => boolean} [isSpecialSwap] -
+ *   NEW — returns true if swapping these two specific cells is a
+ *   legal move ON ITS OWN, independent of whether it would also form
+ *   a color match. This exists because board.js has no idea what a
+ *   "special gem" is (Rule 2/9) — main.js builds the actual check
+ *   (any swap touching a Hyperstar, or any pair of two specials) and
+ *   hands it in, mirroring attemptSwap()'s own dispatch order. Without
+ *   this, a board whose only legal move is e.g. two adjacent
+ *   Dischargers would incorrectly report itself as stuck, since
+ *   findMatches() alone can never see that swap as "legal" — it
+ *   doesn't form a color match at all, it triggers a combo instead.
  * @returns {boolean} true if at least one legal swap would create a match.
  */
-export function hasPossibleMove(g) {
+export function hasPossibleMove(g, isExcluded = () => false, isSpecialSwap = () => false) {
   for (let r = 0; r < SIZE; r++) {
     for (let c = 0; c < SIZE; c++) {
       if (g[r][c] === BLOCKED) continue;
       for (const [dr, dc] of [[0, 1], [1, 0]]) {
         const nr = r + dr, nc = c + dc;
         if (!inBounds(nr, nc) || g[nr][nc] === BLOCKED) continue;
+
+        // NEW — check the special-swap predicate FIRST, before ever
+        // touching findMatches(). A special+special (or Hyperstar+
+        // anything) swap is legal purely because of WHAT it is, not
+        // because of any resulting pattern — so this check has to be
+        // independent of, and take priority over, the color-match
+        // clone-test below.
+        if (isSpecialSwap(r, c, nr, nc)) return true;
+
         const clone = g.map(row => row.slice());
         [clone[r][c], clone[nr][nc]] = [clone[nr][nc], clone[r][c]];
-        if (hasAnyMatch(findMatches(clone))) return true;
+        if (hasAnyMatch(findMatches(clone, isExcluded))) return true;
       }
     }
   }
@@ -183,21 +233,23 @@ export function hasPossibleMove(g) {
 }
 
 /**
- * NEW — finds a legal swap the player could make right now. Same
- * brute-force approach as hasPossibleMove() (try every adjacent swap
- * on a scratch copy and see if it creates a match), but instead of
- * stopping at the first true/false answer, collects EVERY legal swap
- * found and returns one at random — so repeated hints across a run
- * don't always land on the exact same pair. Used by main.js's hint
- * feature (see showHintNow()), not by any core gameplay logic.
+ * Finds a legal swap the player could make right now. Same
+ * brute-force approach as hasPossibleMove().
  *
  * @param {number[][]} g - the grid to search.
+ * @param {(row: number, col: number) => boolean} [isExcluded] -
+ *   forwarded straight to findMatches() on each hypothetical clone —
+ *   see hasPossibleMove()'s doc comment for the same known
+ *   simplification (evaluated against current, not hypothetical,
+ *   special-gem positions).
+ * @param {(r1: number, c1: number, r2: number, c2: number) => boolean} [isSpecialSwap] -
+ *   NEW — same predicate hasPossibleMove() takes, same reasoning: a
+ *   special-gem combo swap is a legal move in its own right and gets
+ *   added to the candidate list directly, without needing to pass the
+ *   color-match clone-test at all.
  * @returns {{ from: [number, number], to: [number, number] } | null}
- *   one legal swap's two cells, or null if no legal move exists at
- *   all (the stuck-board case — handled separately, by
- *   checkEndState()'s game-over path, not by this function).
  */
-export function findHintMove(g) {
+export function findHintMove(g, isExcluded = () => false, isSpecialSwap = () => false) {
   const legalMoves = [];
   for (let r = 0; r < SIZE; r++) {
     for (let c = 0; c < SIZE; c++) {
@@ -205,9 +257,18 @@ export function findHintMove(g) {
       for (const [dr, dc] of [[0, 1], [1, 0]]) {
         const nr = r + dr, nc = c + dc;
         if (!inBounds(nr, nc) || g[nr][nc] === BLOCKED) continue;
+
+        // NEW — a special-swap combo is legal on its own; record it
+        // as a candidate and skip straight to the next direction,
+        // same as the match-found branch below does.
+        if (isSpecialSwap(r, c, nr, nc)) {
+          legalMoves.push({ from: [r, c], to: [nr, nc] });
+          continue;
+        }
+
         const clone = g.map(row => row.slice());
         [clone[r][c], clone[nr][nc]] = [clone[nr][nc], clone[r][c]];
-        if (hasAnyMatch(findMatches(clone))) {
+        if (hasAnyMatch(findMatches(clone, isExcluded))) {
           legalMoves.push({ from: [r, c], to: [nr, nc] });
         }
       }

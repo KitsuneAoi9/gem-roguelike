@@ -36,6 +36,7 @@ Target Score = ROUND(2000 * (1.35 ^ (Level-1))) * Level + 500 * Pow(1.5, Level)
 To
 Target Score = ROUND(2000 * (1.25 ^ (Level-1))) * Level + 500 * Pow(1.5, Level)
 
+========================================================================================================
 Patch Note 2026/09/21 002
 
 1. Fixes Hyperstar scoring.
@@ -85,3 +86,38 @@ Target Score = ROUND(1000 * (1.15 ^ (Level-1))) * Level + 500 * Pow(1.05, Level)
 11. Increase the size of the text and the board by about 50%.
 
 12. Added version text.
+
+========================================================================================================
+Patch Note 2026/09/22 v0.2.0.1
+
+1. Fix Maniac's decription still showing the value to be +3.0.
+
+2. Changed the shop formula:
+
+From
+Shop item price = Base score * Inflation Scaling * Base Multiplier *  Rarity
+
+To
+Shop item price = Base score * Inflation Scaling * Base Multiplier +  Rarity * Score when you enter shop
+
+3. Removed construction for the time being
+
+4. Changed boon rarirty weight. 
+It is now
+Common: 50% | Uncommon: 25% | Rare: 15% | Epic: 8% | Legendary: 2%.
+
+5. Legendary boons are gated behind level , everywhere.
+
+7. Hyperstar gem now is no longer treated as the same gem it is created from. It is now a standalone gem that you can't match it normally.
+
+8. Star gem and Two special gems next to each other no longer is ignored for 'no moves' check.
+
+9. Shop prices no longer drift down after each purchase.
+
+10. Changed the target score formula again. Introducing milestone scaling to the current formula.
+The target score will go up another 10% every 5 levels.
+
+Levels 1–5: milestoneBand = 0 → factor = 1.10^0 = 1.0 (identical to Part 4's formula)
+Levels 6–10: milestoneBand = 1 → factor = 1.10
+Levels 11–15: milestoneBand = 2 → factor = 1.21
+Levels 16–20: milestoneBand = 3 → factor = 1.331

@@ -176,6 +176,14 @@ let shopContinuation = null;
 // read by renderShopDialog() for every card's price. Doesn't change
 // mid-visit.
 let currentShopTier = 1;
+// NEW — the player's score at the MOMENT the shop opened, snapshotted
+// once. Every card's price is based on THIS, not the live `score`
+// variable — otherwise buying one boon would lower `score`, which
+// would immediately cheapen every other card still on the shelf
+// (since price includes a rarity% x score term). Reset to 0 mainly
+// for tidiness; it's always overwritten by openShopDialog() before
+// renderShopDialog() ever reads it.
+let shopEntryScore = 0;
 
 /**
  * Sets every bit of static, non-runtime-dependent text (title,
@@ -338,6 +346,65 @@ function signed(amount) {
 }
 
 /**
+ * NEW — the isExcluded predicate for board.js's findMatches()/
+ * hasPossibleMove()/findHintMove(): true for any cell currently
+ * holding a Hyperstar. A Hyperstar is swap-activated ONLY (see
+ * special_gem.js's resolveSpecialGems() dispatch — it deliberately
+ * has no passive-match case) — but without this, findMatches() would
+ * still happily sweep a Hyperstar's cell into an adjacent plain-color
+ * run purely because its underlying grid[][] value still matches
+ * that color, silently destroying it as a "bonus matched gem"
+ * instead of leaving it on the board to be triggered by an actual
+ * swap combo. Laser/Discharger are deliberately NOT excluded here —
+ * being swept into a normal match (or a chain-reaction blast) is how
+ * THEIR passive effect is meant to trigger; only Hyperstar needs to
+ * stand apart.
+ *
+ * @param {number} row
+ * @param {number} col
+ * @returns {boolean}
+ */
+function isHyperstarCell(row, col) {
+  return specialGemState.grid[row][col] === SPECIAL_GEM_TYPE.HYPERSTAR;
+}
+
+/**
+ * NEW — the isSpecialSwap predicate for board.js's hasPossibleMove()/
+ * findHintMove(): true if swapping (r1,c1) with (r2,c2) is legal
+ * purely because of what's sitting in those two cells, independent of
+ * any color match. Mirrors attemptSwap()'s own case-1-through-7
+ * dispatch order exactly:
+ *   - either cell is a Hyperstar -> ALWAYS legal (covers cases 1-4:
+ *     Hyperstar+Hyperstar, Hyperstar+Laser, Hyperstar+Discharger,
+ *     Hyperstar+plain gem — a Hyperstar swap is never "invalid").
+ *   - neither is a Hyperstar, but BOTH cells hold some special gem
+ *     (so some Laser/Discharger combination) -> ALWAYS legal too
+ *     (covers cases 5-7: Laser+Laser, Discharger+Laser either way,
+ *     Discharger+Discharger).
+ *   - anything else (a lone Laser/Discharger next to a plain gem, or
+ *     two plain gems) -> not a guaranteed move; falls through to the
+ *     normal findMatches() color-match check instead.
+ *
+ * @param {number} r1
+ * @param {number} c1
+ * @param {number} r2
+ * @param {number} c2
+ * @returns {boolean}
+ */
+function isSpecialSwapPair(r1, c1, r2, c2) {
+  const a = specialGemState.grid[r1][c1];
+  const b = specialGemState.grid[r2][c2];
+
+  if (a === SPECIAL_GEM_TYPE.HYPERSTAR || b === SPECIAL_GEM_TYPE.HYPERSTAR) return true;
+
+  // Neither is a Hyperstar — legal only if BOTH sides are some special
+  // gem (both truthy). A single special next to a plain gem is NOT
+  // automatically legal — that's a normal swap that still needs an
+  // actual color match to succeed.
+  return !!a && !!b;
+}
+
+/**
  * Builds the History/popup text for one cascade STEP resolved via the
  * normal match-detection path (resolveMatches()) — NOT the
  * swap-activated special-gem combos, which build their own dedicated
@@ -449,7 +516,7 @@ function scheduleHintTimer() {
  */
 function showHintNow() {
   if (busy) return; // safety net — shouldn't normally fire while busy/mid-cascade/dialog, but don't show a hint if it somehow does
-  const move = findHintMove(grid);
+  const move = findHintMove(grid, isHyperstarCell, isSpecialSwapPair);
   if (!move) return; // no legal move at all — the stuck-board game-over path handles that separately
   showHintHighlight(boardEl, [move.from, move.to]);
 }
@@ -1108,7 +1175,7 @@ function attemptSwap(r1, c1, r2, c2) {
 
     // --- case 8: nothing special activated by this swap — fall back
     // to the normal match-detection flow, exactly as before ---
-    const matched = findMatches(grid);
+    const matched = findMatches(grid, isHyperstarCell);
 
     if (!hasAnyMatch(matched)) {
       messageEl.textContent = MESSAGES.INVALID_SWAP;
@@ -1153,7 +1220,7 @@ function attemptSwap(r1, c1, r2, c2) {
  * @returns {void}
  */
 function resolveMatches(swapCells = null) {
-  const matched = findMatches(grid);
+  const matched = findMatches(grid, isHyperstarCell);
 
   if (!hasAnyMatch(matched)) {
     if (pendingLevelUp) {
@@ -1358,6 +1425,10 @@ function proceedAfterBoonPick(def, onContinue) {
  */
 function openShopDialog(onContinue) {
   currentShopTier = shopTierForLevel(progressionState.level - 1);
+  // Snapshot score HERE, once, before any purchase can happen this
+  // visit — the shop's "Your score" subtitle never changes mid-visit, 
+  // even if the player buys something and the score drops.
+  shopEntryScore = score;
   rollBoonShopOffer();
   shopContinuation = onContinue;
   renderShopDialog();
@@ -1378,7 +1449,7 @@ function renderShopDialog() {
   shopChoicesEl.innerHTML = '';
 
   boonShopState.offer.forEach(def => {
-    const price = calculateBoonPrice(def.rarity, currentShopTier);
+    const price = calculateBoonPrice(def.rarity, currentShopTier, shopEntryScore);
     const alreadyBought = isBoonPurchasedThisVisit(def.id);
     const canAfford = score >= price;
 
@@ -1468,7 +1539,7 @@ function checkEndState() {
     return;
   }
 
-  if (!hasPossibleMove(grid)) {
+  if (!hasPossibleMove(grid, isHyperstarCell, isSpecialSwapPair)) {
     if (PREVENT_DEADLOCK) {
       messageEl.textContent = MESSAGES.RESHUFFLING;
       setTimeout(() => {
