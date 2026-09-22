@@ -121,3 +121,16 @@ Levels 1–5: milestoneBand = 0 → factor = 1.10^0 = 1.0 (identical to Part 4's
 Levels 6–10: milestoneBand = 1 → factor = 1.10
 Levels 11–15: milestoneBand = 2 → factor = 1.21
 Levels 16–20: milestoneBand = 3 → factor = 1.331
+
+11. Some balance changes for the existing boons.
+
+========================================================================================================
+Patch Note 2026/09/22 v0.2.1.0
+
+1. Added Event feature.
+
+2. Redesign the boon card. Color coded the border based on the rarirty.
+
+3. Add tooltips to the global multiplier. (Need testing and description proofreading).
+
+4. Fix Frenzy (and other boons) from targeting locked gems.

@@ -11,6 +11,16 @@
   --paper: #ece4d8;
   --paper-dim: #a89d8f;
   --gold: #e0b34a;
+
+  /* NEW — one color per boon rarity, used for card border color
+     (boon dialog + shop, both dialog.css) and the rarity text badge
+     inside each boon card. --gold is reused for Legendary rather than
+     defining a near-duplicate color. */
+  --rarity-common: #f0ece2;
+  --rarity-uncommon: #3f8f5f;
+  --rarity-rare: #3aa0ff;
+  --rarity-epic: #b24bf3;
+  --rarity-legendary: var(--gold);
 }
 
 * { box-sizing: border-box; }
@@ -264,6 +274,37 @@ button#reset:hover {
   color: var(--gold);
   font-variant-numeric: tabular-nums;
 }
+/* ============================================================
+   INFO TOOLTIP (side-stats labels)
+   Pure-CSS hover tooltip: dashed underline signals "hover me", the
+   tooltip box itself is rendered from the element's OWN data-tooltip
+   attribute via ::after, so no JS or extra markup per tooltip is
+   needed — just add the class + attribute to any label.
+   ============================================================ */
+.side-stat-label--info {
+  border-bottom: 1px dashed var(--paper-dim);
+  cursor: help;
+  position: relative; /* anchor for the ::after tooltip box below */
+}
+
+.side-stat-label--info:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  top: 125%;
+  width: 220px;
+  background: var(--rock-deep);
+  border: 1px solid var(--vein);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  color: var(--paper);
+  white-space: normal; /* let the tooltip text wrap, unlike the row it sits in */
+  z-index: 20;          /* sit above the side panel's own content */
+  box-shadow: 0 10px 24px -10px rgba(0, 0, 0, 0.7);
+  pointer-events: none; /* purely informational — never blocks a click underneath */
+}
 
 .gem-stats-list {
   display: flex;
@@ -425,6 +466,13 @@ button#reset:hover {
   color: #b892f0;
 }
 
+/* NEW — Encounter/Elite/Challenge flavor + outcome lines get their
+   own color, distinct from a plain boon pick (violet) or a plain
+   score line (green/red). */
+.history-entry--event {
+  color: #e08a4a;
+}
+
 /* 'neutral' intentionally has no rule here — it just inherits
    .history-entry's own paper-dim color. Kept as a valid tone value
    (see history.js's addHistoryEntry() doc comment) for things like a
@@ -459,4 +507,23 @@ button#reset:hover {
   opacity: 0.6;
   pointer-events: none;
   z-index: 5;
+}
+
+/* ============================================================
+   OBJECTIVE BANNER
+   Shows the active Elite countdown or Challenge status. Hidden
+   entirely (via .hidden) when no event modifier is active — only
+   main.js's updateObjectiveBanner() ever toggles that.
+   ============================================================ */
+.objective-banner {
+  margin: 4px 0 0;
+  padding: 8px 16px;
+  background: var(--rock);
+  border: 1px solid var(--vein);
+  border-radius: 4px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.8rem;
+  color: var(--gold);
+  text-align: center;
+  letter-spacing: 0.02em;
 }

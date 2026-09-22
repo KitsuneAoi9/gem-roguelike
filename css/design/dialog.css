@@ -68,32 +68,72 @@
    choice screen. There's no separate "confirm" button — clicking a
    card picks it immediately and closes the dialog (see main.js's
    showBoonDialog()). Hover highlight is the only affordance needed.
+
+   REWORKED THIS ROUND — cards are now a fixed, tall rectangle
+   (loosely Yu-Gi-Oh-card-proportioned, not an exact replica) instead
+   of a flexible short strip, and their border is both thicker (2px,
+   up from 1px — "+1pt") and colored per the boon's rarity via a
+   boon-card--<rarity> modifier class main.js adds at creation time.
    ============================================================ */
 
 .boon-dialog-box {
-  max-width: 640px;
+  /* Widened to comfortably fit 3 of the new, much taller/wider cards
+     side by side with room to breathe: 3 x 230px card + 2 x 14px gap
+     + 2 x 32px dialog padding ≈ 782px — 820 leaves a little slack. */
+  max-width: 820px;
 }
 
 .boon-choices {
   display: flex;
   gap: 14px;
   margin-top: 12px;
+  /* NEW — cards no longer stretch to fill the row (they're a fixed
+     size now), so center them instead of letting flex:1 spread them
+     edge-to-edge like before. */
+  justify-content: center;
 }
 
 .boon-card {
-  flex: 1;
-  border: 1px solid var(--vein);
-  border-radius: 4px;
+  /* CHANGED — fixed tall-rectangle footprint instead of flex: 1.
+     Roughly a Yu-Gi-Oh card's proportions (taller than wide), not an
+     exact physical-card ratio. */
+  flex: 0 0 230px;
+  width: 230px;
+  height: 340px;
+  display: flex;
+  flex-direction: column;
+
+  /* CHANGED — thicker border (was 1px), color now set per-rarity by
+     the .boon-card--<rarity> rules below instead of a flat --vein. */
+  border-width: 2px;
+  border-style: solid;
+  border-color: var(--vein); /* fallback if a rarity class is somehow missing */
+  border-radius: 6px;
   padding: 16px 14px;
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.15s ease, transform 0.15s ease;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
+/* CHANGED — hover no longer overrides border-color to gold (that
+   would stomp the rarity color this round introduces). A soft glow +
+   lift communicates "hovered" instead, while the rarity border stays
+   visible the whole time. */
 .boon-card:hover {
-  border-color: var(--gold);
   transform: translateY(-2px);
+  box-shadow: 0 8px 20px -8px rgba(224, 179, 74, 0.45);
 }
+
+/* NEW — one rule per rarity, sets this specific card's border color.
+   main.js adds exactly one of these five classes (boon-card--common
+   / --uncommon / --rare / --epic / --legendary) to every card it
+   builds, in both the boon dialog AND the shop dialog (see the SHOP
+   DIALOG section below — shares this same rarity-class convention). */
+.boon-card--common     { border-color: var(--rarity-common); }
+.boon-card--uncommon    { border-color: var(--rarity-uncommon); }
+.boon-card--rare       { border-color: var(--rarity-rare); }
+.boon-card--epic       { border-color: var(--rarity-epic); }
+.boon-card--legendary   { border-color: var(--rarity-legendary); }
 
 .boon-card h3 {
   margin: 0 0 6px;
@@ -103,18 +143,41 @@
   color: var(--paper);
 }
 
-.boon-card p {
+/* CHANGED — flex-grow so the description fills whatever vertical
+   space the taller card leaves between the header and the footer,
+   regardless of how long any one boon's description text runs. */
+.boon-card-desc {
+  flex: 1;
   margin: 0;
   font-family: 'Helvetica Neue', Arial, sans-serif;
   font-size: 0.76rem;
   color: var(--paper-dim);
+  line-height: 1.4;
 }
 
-/* NEW — small gem icon next to a boon card's title, so the player
-   can tell at a glance which gem a per-gem boon (Affinity/Bounty/
-   Frenzy/etc.) affects without parsing the description text. Global
-   boons (no effect.gem) just don't get one — main.js skips the
-   <img> entirely for those. */
+/* NEW — small rarity label pinned to the card's bottom edge, colored
+   to match the border so the rarity reads twice (border + text) at a
+   glance. Separated from the description by a hairline divider. */
+.boon-card-footer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vein);
+}
+
+.boon-card-rarity {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--paper-dim); /* fallback — overridden per rarity below */
+}
+
+.boon-card--common .boon-card-rarity     { color: var(--rarity-common); }
+.boon-card--uncommon .boon-card-rarity    { color: var(--rarity-uncommon); }
+.boon-card--rare .boon-card-rarity       { color: var(--rarity-rare); }
+.boon-card--epic .boon-card-rarity       { color: var(--rarity-epic); }
+.boon-card--legendary .boon-card-rarity   { color: var(--rarity-legendary); }
+
 .boon-card-header {
   display: flex;
   align-items: center;
@@ -122,8 +185,6 @@
   margin-bottom: 6px;
 }
 
-/* Overrides .boon-card h3's own margin-bottom (same specificity,
-   later in the file wins) — the header div now owns that spacing. */
 .boon-card-header h3 {
   margin: 0;
 }
@@ -143,33 +204,63 @@
    closing only happens via the explicit Leave button. main.js's
    renderShopDialog() toggles .shop-card--bought/--unaffordable per
    card, on every render.
+
+   CHANGED THIS ROUND — all BOON_SHOP_OFFER_COUNT (5) cards now
+   always sit in a single row (no wrap) instead of wrapping onto a
+   second line, and share the boon dialog's thicker, rarity-colored
+   border treatment via the SAME .shop-card--<rarity> convention.
    ============================================================ */
 
 .shop-dialog-box {
-  max-width: 900px;
+  /* Widened to fit 5 cards in one row with no wrap: 5 x 160px card +
+     4 x 14px gap + 2 x 32px dialog padding = 920px exactly — a touch
+     of margin isn't added here since the dialog box itself has no
+     hard outer constraint stopping it from being exactly this wide. */
+  max-width: 940px;
 }
 
 .shop-choices {
   display: flex;
-  flex-wrap: wrap;
+  /* CHANGED — was flex-wrap: wrap (allowed a 2nd row). Now nowrap so
+     all 5 cards are forced onto one row, per design ask #3. */
+  flex-wrap: nowrap;
   gap: 14px;
   margin-top: 12px;
 }
 
 .shop-card {
-  flex: 1 1 160px;
-  border: 1px solid var(--vein);
+  /* CHANGED — fixed width, no grow/shrink, instead of the old
+     `flex: 1 1 160px` (which allowed cards to stretch/wrap). A fixed
+     0 0 160px is what actually guarantees 5-in-a-row regardless of
+     how long any one card's text runs. */
+  flex: 0 0 160px;
+  width: 160px;
+
+  /* CHANGED — thicker, rarity-colored border, same treatment as
+     .boon-card above. */
+  border-width: 2px;
+  border-style: solid;
+  border-color: var(--vein); /* fallback */
   border-radius: 4px;
   padding: 14px 12px;
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+  transition: border-color 0.15s ease, transform 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease;
 }
 
 .shop-card:hover {
-  border-color: var(--gold);
   transform: translateY(-2px);
+  box-shadow: 0 8px 20px -8px rgba(224, 179, 74, 0.45);
 }
+
+/* NEW — same 5 rarity classes as .boon-card, reused verbatim for the
+   shop's cards. main.js adds one of these alongside --bought/
+   --unaffordable as needed. */
+.shop-card--common     { border-color: var(--rarity-common); }
+.shop-card--uncommon    { border-color: var(--rarity-uncommon); }
+.shop-card--rare       { border-color: var(--rarity-rare); }
+.shop-card--epic       { border-color: var(--rarity-epic); }
+.shop-card--legendary   { border-color: var(--rarity-legendary); }
 
 .shop-card-price {
   margin-top: 8px;
@@ -178,25 +269,93 @@
   font-weight: 600;
 }
 
-/* Already bought this visit — inert, dimmed, no hover lift. */
 .shop-card--bought {
   opacity: 0.4;
   cursor: default;
 }
 
 .shop-card--bought:hover {
-  border-color: var(--vein);
   transform: none;
+  box-shadow: none;
 }
 
-/* Too expensive right now — same inert treatment, slightly less
-   dimmed than "bought" so the two read differently at a glance. */
 .shop-card--unaffordable {
   opacity: 0.55;
   cursor: default;
 }
 
 .shop-card--unaffordable:hover {
-  border-color: var(--vein);
   transform: none;
+  box-shadow: none;
+}
+
+/* ============================================================
+   EVENT DIALOG
+   Shared by Encounter/Elite/Challenge — a simpler two-button layout
+   than the boon/shop card grids, since there's just one story block
+   and (at most) two choices at a time.
+
+   CHANGED THIS ROUND — noticeably larger box (was cramped at 420px)
+   and a scale+fade "pop in" entrance whenever it's shown. The
+   animation works off plain display:none/flex toggling (main.js just
+   adds/removes .hidden, same as every other dialog) — browsers
+   restart a CSS animation automatically whenever an element re-enters
+   layout from display:none, so no JS timing code is needed at all.
+   ============================================================ */
+
+.event-dialog-box {
+  max-width: 620px; /* CHANGED — widened further to comfortably hold Folly's 6 initial buttons when wrapped */
+  min-width: 420px;
+  padding: 36px 40px;
+}
+
+.event-story {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--paper-dim);
+  /* NEW — renders the "\n\n" paragraph breaks in event.js's flavor
+     text as actual visual gaps instead of collapsing them into one
+     run-on line (default HTML whitespace handling). */
+  white-space: pre-line;
+}
+
+.event-choices {
+  display: flex;
+  flex-wrap: wrap; /* CHANGED — was nowrap-by-default single row; Folly's 6 buttons and Lost Miner's 3 both need to wrap gracefully */
+  gap: 10px;
+  margin-top: 20px;
+  justify-content: center;
+}
+
+.event-choices button {
+  /* CHANGED — was flex: 1 (stretched 2 buttons edge-to-edge). With
+     up to 6 buttons that would make each one illegibly narrow, so
+     buttons now size to their own content with a sane minimum width
+     instead of splitting the row evenly. */
+  flex: 0 1 auto;
+  min-width: 160px;
+  padding: 10px 16px;
+}
+
+/* NEW — entrance animation. Scoped to #event-dialog specifically (per
+   this round's ask); the same two rules could be pointed at the bare
+   .dialog-overlay/.dialog-box selectors later to give every dialog in
+   the game the same pop-in treatment for free, if that's wanted. */
+#event-dialog:not(.hidden) {
+  animation: event-overlay-fade-in 0.18s ease;
+}
+
+#event-dialog:not(.hidden) .event-dialog-box {
+  animation: event-dialog-pop-in 0.24s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes event-overlay-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes event-dialog-pop-in {
+  from { transform: scale(0.9) translateY(10px); opacity: 0; }
+  to   { transform: scale(1) translateY(0); opacity: 1; }
 }

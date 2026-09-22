@@ -18,11 +18,11 @@ import {
 import { SHOP_LEVEL_INTERVAL } from '../resources/shop/shop.js';
 import { generateEqualWeightBoonOffer } from './boon.js';
 
-// Board-shape boons (expand/shrink) need an immediate placement click
-// right after picking — that doesn't fit "buy several boons, then
-// leave whenever." Excluded from the shop offer entirely; see the
-// handoff for this deliberate scope decision.
-const PLACEMENT_ONLY_KINDS = new Set(['board_expand', 'board_shrink', 'board_expand_and_shrink']);
+// CHANGE — was a local `const`, now exported so gameplay/event.js can
+// reuse the exact same "these kinds need a placement click, don't
+// hand them out as a random reward" filter, instead of duplicating
+// the Set of kind strings a second time.
+export const PLACEMENT_ONLY_KINDS = new Set(['board_expand', 'board_shrink', 'board_expand_and_shrink']);
 
 /**
  * Price to buy one boon from the shop, given its rarity and which

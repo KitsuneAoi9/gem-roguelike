@@ -1,33 +1,40 @@
 // ============================================================
-// BOON_EFFECTS.JS — applies a picked boon's effect to game state.
+// BOON_EFFECTS.JS — applies (and, new this round, REVERSES) a picked
+// boon's effect on game state.
 //
-// Separate from boon.js (offer generation + pick tracking) per Rule 5
-// — this file's only job is "given a boon definition, mutate the
-// right state." Dispatches on effect.kind (see resources/boon/boon.js).
+// applyBoonEffect(def) now RETURNS a normalized "appliedEffect"
+// record describing exactly what it just did (which gem(s), which
+// bucket, how much). The caller attaches that return value onto the
+// activeBoon entry pickBoon()/grantBoonBypassingCap() just created
+// (`activeBoon.appliedEffect = applyBoonEffect(def)`), so a LATER
+// call to reverseBoonEffect(activeBoon) can undo EXACTLY what was
+// applied — including the specific random gems a Frenzy/Brilliance/
+// Addict pick happened to penalize, which can't be re-derived from
+// `def` alone since that randomness is resolved fresh every pick.
 //
-// REWORKED THIS ROUND — three effect kinds (frenzy, gem_score_brilliance
-// [NEW], gem_multiplier_addict) now pick TWO RANDOM OTHER gems to
-// penalize, instead of hitting every other gem in the catalog. That
-// randomness is resolved HERE, once, at apply time — never in
-// resources/boon/boon.js (Rule 6: no functions/randomness in
-// resources) and never re-rolled later. Two brand new kinds this
-// round: 'gem_polish' (Polish — touches both score AND multiplier in
-// one pick) and 'all_gem_score_delta'/'all_gem_multiplier_delta'
-// (Jeweler/Gemologist — the new "non-series", not-gem-scoped boons).
+// This is the foundation for the event system's "trade away a boon"
+// (Encounter) and "lose a random boon" (Elite loss) — and, per
+// design, a future level-up/level-down boon mechanic is expected to
+// reuse this exact reversal path too.
 // ============================================================
 
 import { gemBaseState } from '../resources/base%20value/gem_base_state.js';
 import { boonEffectState } from '../resources/boon/boon_effect_state.js';
+import { gemUnlockState } from '../resources/gem/gem_unlock_state.js';
 import { ALL_GEM_IDS } from '../resources/constant/constants.js';
 import { progressionState } from '../resources/progression/progression.js';
 import { resetGemBaseState } from './gem_base.js';
 import { calculateScoreTarget } from './progression.js';
 
+// NEW — module-level counter so every frenzyPicks entry carries a
+// unique id, letting reverseBoonEffect() find and splice out EXACTLY
+// the entry a specific Frenzy pick pushed, even if the player has
+// picked several different Frenzy boons this run. Reset alongside
+// everything else in resetBoonEffects().
+let nextFrenzyPickId = 1;
+
 /**
- * Resets every boon-driven state bucket for a fresh run. Call from
- * main.js's init(), BEFORE resetProgression() — the target-score
- * multiplier this resets needs to be back at 1.0 before level 1's
- * target is calculated.
+ * Resets every boon-driven state bucket for a fresh run.
  *
  * @returns {void}
  */
@@ -38,185 +45,274 @@ export function resetBoonEffects() {
   boonEffectState.globalScoreMultiplier = 1.0;
   boonEffectState.globalScoreBonus = 0;
   boonEffectState.targetScoreMultiplier = 1.0;
+  nextFrenzyPickId = 1; // NEW
 }
 
 /**
- * NEW — picks `count` DISTINCT random gem ids from the full 11-gem
- * catalog (ALL_GEM_IDS — active AND locked/future), excluding
- * `excludeId` (always the boon's own target gem, so a boon can never
- * accidentally penalize the same gem it's buffing).
+ * Picks `count` DISTINCT random gem ids to penalize, excluding
+ * `excludeId` (the boon's own target gem).
  *
- * Used by every "penalize N random OTHER gems" effect this round —
- * Frenzy, Brilliance, Addict. Locked gems ARE eligible targets, same
- * precedent Lush already set (its own "penalize every other gem"
- * sweep never excluded locked gems either) — a penalty landing on a
- * gem before it's unlocked just means that gem starts its unlocked
- * life already slightly behind, same as Lush's existing behavior.
+ * CHANGED THIS ROUND — only draws from UNLOCKED gems now. Frenzy/
+ * Brilliance/Addict's random penalty target was landing on locked
+ * gems (Onyx etc.) — a penalty the player can't even see reflected
+ * anywhere (the side panel only shows the 7 active gems), and one
+ * that gives that gem's eventual unlock a nasty invisible head-start
+ * debuff. This does NOT change Lush's or Jeweler/Gemologist's "every
+ * gem in the catalog" sweep elsewhere in this file — those are
+ * untouched, per existing precedent — only the RANDOM-pick
+ * archetypes are affected, since only they route through this helper.
  *
- * Simple partial shuffle-by-removal from a scratch copy of the
- * candidate list, taking the first `count` — good enough at this
- * list's tiny size (at most 11 entries) and guarantees no gem is
- * ever picked twice for the same boon.
- *
- * @param {string} excludeId - the boon's own gem — never picked.
- * @param {number} count - how many distinct other gems to pick.
- * @returns {string[]} exactly `count` gem ids (the catalog always has
- *   far more than `count` non-excluded entries, so this never comes
- *   up short in practice).
+ * @param {string} excludeId
+ * @param {number} count
+ * @returns {string[]}
  */
 function pickRandomOtherGems(excludeId, count) {
-  // Start from every gem EXCEPT the one this boon is targeting.
-  const candidates = ALL_GEM_IDS.filter(id => id !== excludeId);
+  const candidates = ALL_GEM_IDS.filter(id => id !== excludeId && gemUnlockState.unlocked[id]);
   const pool = candidates.slice();
   const picked = [];
-
   for (let i = 0; i < count && pool.length > 0; i++) {
     const randomIndex = Math.floor(Math.random() * pool.length);
     picked.push(pool[randomIndex]);
-    // Remove the picked gem from the pool so it can never be chosen
-    // a second time for THIS boon's penalty set.
-    pool.splice(randomIndex, 1);
+    pool.splice(randomIndex, 1); // never pick the same gem twice for this one boon
   }
-
   return picked;
 }
 
 /**
- * Applies one picked boon's effect. Call right after pickBoon()
- * succeeds.
+ * Applies one picked boon's effect. Call right after pickBoon()/
+ * grantBoonBypassingCap() succeeds.
+ *
+ * RETURNS a normalized "appliedEffect" record describing exactly what
+ * was just mutated, so the caller can attach it to the activeBoon
+ * entry for later exact reversal. The shape varies by `effect.kind`
+ * (see each case), but every shape is self-contained —
+ * reverseBoonEffect() never re-reads `def` or re-rolls anything, it
+ * just undoes precisely what's recorded here.
  *
  * @param {object} def - a BOON_POOL entry (the one just picked).
- * @returns {void}
+ * @returns {object} the appliedEffect record.
  */
 export function applyBoonEffect(def) {
   const effect = def.effect;
 
   switch (effect.kind) {
     case 'gem_score_delta':
-      // Simple, no-drawback base-score bump — used by Bounty and
-      // Grandeur (they only differ in `amount`).
       gemBaseState.perGem[effect.gem].scoreBonus += effect.amount;
-      break;
+      return { kind: effect.kind, gem: effect.gem, scoreAmount: effect.amount };
 
     case 'gem_multiplier_delta':
-      // Simple, no-drawback base-multiplier bump — used by
-      // Enthusiast, Maniac, and Fanatic (differ only in `amount`).
       gemBaseState.perGem[effect.gem].multiplierBonus += effect.amount;
-      break;
+      return { kind: effect.kind, gem: effect.gem, multiplierAmount: effect.amount };
 
-    // NEW — Polish: the only archetype that bumps BOTH base score
-    // AND base multiplier from a single pick, with no drawback at
-    // all. Two independent += lines rather than one combined helper,
-    // since scoreBonus and multiplierBonus are separate buckets on
-    // gemBaseState.perGem.
     case 'gem_polish':
+      // Polish is the one archetype that bumps BOTH buckets at once —
+      // two independent += lines, since scoreBonus/multiplierBonus
+      // are separate fields on gemBaseState.perGem.
       gemBaseState.perGem[effect.gem].scoreBonus += effect.scoreAmount;
       gemBaseState.perGem[effect.gem].multiplierBonus += effect.multiplierAmount;
-      break;
+      return {
+        kind: effect.kind,
+        gem: effect.gem,
+        scoreAmount: effect.scoreAmount,
+        multiplierAmount: effect.multiplierAmount,
+      };
 
-    case 'gem_score_lush':
-      // Lush: +amount to the picked gem, -othersPenalty to EVERY
-      // OTHER gem in the catalog (including locked ones) — unchanged
-      // from before. This is the "hits everyone" archetype; Brilliance
-      // below is the "hits two random gems" one — kept as a separate
-      // kind specifically so their very different blast radius can
-      // never be confused at a call site.
+    case 'gem_score_lush': {
       gemBaseState.perGem[effect.gem].scoreBonus += effect.amount;
-      ALL_GEM_IDS.forEach(id => {
-        if (id !== effect.gem) gemBaseState.perGem[id].scoreBonus += effect.othersPenalty;
-      });
-      break;
+      // Deterministic (every OTHER gem, no randomness) — still record
+      // the exact id list touched, rather than making
+      // reverseBoonEffect() re-derive Lush's "everyone but me" rule
+      // itself.
+      const affectedIds = ALL_GEM_IDS.filter(id => id !== effect.gem);
+      affectedIds.forEach(id => { gemBaseState.perGem[id].scoreBonus += effect.othersPenalty; });
+      return {
+        kind: effect.kind,
+        gem: effect.gem,
+        scoreAmount: effect.amount,
+        penalizedGems: affectedIds,
+        penaltyAmount: effect.othersPenalty,
+      };
+    }
 
-    // NEW — Brilliance: +amount to the picked gem, -othersPenalty to
-    // exactly `effect.penalizedCount` (2) RANDOM other gems, chosen
-    // fresh right now via pickRandomOtherGems(). Unlike Lush, most of
-    // the catalog is untouched — only the two unlucky gems randomly
-    // drawn here ever see the penalty, and that draw happens once,
-    // permanently, at pick time (same "baked into gemBaseState, never
-    // re-rolled" spirit as every other base-value boon).
     case 'gem_score_brilliance': {
       gemBaseState.perGem[effect.gem].scoreBonus += effect.amount;
       const penalizedGems = pickRandomOtherGems(effect.gem, effect.penalizedCount);
-      penalizedGems.forEach(id => {
-        gemBaseState.perGem[id].scoreBonus += effect.othersPenalty;
-      });
-      break;
+      penalizedGems.forEach(id => { gemBaseState.perGem[id].scoreBonus += effect.othersPenalty; });
+      return {
+        kind: effect.kind,
+        gem: effect.gem,
+        scoreAmount: effect.amount,
+        penalizedGems,
+        penaltyAmount: effect.othersPenalty,
+      };
     }
 
-    case 'gem_multiplier_addict':
-      // CHANGED THIS ROUND — Addict used to penalize EVERY other
-      // gem's multiplier; now it only penalizes `effect.penalizedCount`
-      // (2) RANDOM other gems, same one-time-random-draw pattern as
-      // Brilliance just above.
+    case 'gem_multiplier_addict': {
       gemBaseState.perGem[effect.gem].multiplierBonus += effect.amount;
-      pickRandomOtherGems(effect.gem, effect.penalizedCount).forEach(id => {
-        gemBaseState.perGem[id].multiplierBonus += effect.othersPenalty;
-      });
-      break;
+      const penalizedGems = pickRandomOtherGems(effect.gem, effect.penalizedCount);
+      penalizedGems.forEach(id => { gemBaseState.perGem[id].multiplierBonus += effect.othersPenalty; });
+      return {
+        kind: effect.kind,
+        gem: effect.gem,
+        multiplierAmount: effect.amount,
+        penalizedGems,
+        penaltyAmount: effect.othersPenalty,
+      };
+    }
 
     case 'affinity':
       boonEffectState.affinityBonus[effect.gem] = (boonEffectState.affinityBonus[effect.gem] || 0) + effect.amount;
-      break;
+      return { kind: effect.kind, gem: effect.gem, amount: effect.amount };
 
     case 'frenzy': {
-      // CHANGED THIS ROUND — the per-match penalty used to apply to
-      // EVERY gem other than the picked one; now it only applies to
-      // `effect.penalizedCount` (2) RANDOM other gems, drawn once
-      // right here and stored on the pick itself (`penalizedGems`) so
-      // score.js's frenzyAdjustmentFor() knows exactly which two
-      // gems this specific Frenzy pick affects, for the rest of the
-      // run. A gem that's neither the target NOR one of these two
-      // random picks is completely untouched by this Frenzy pick.
       const penalizedGems = pickRandomOtherGems(effect.gem, effect.penalizedCount);
+      // NEW — frenzyPickId ties this exact frenzyPicks[] entry back
+      // to the appliedEffect record below, so reverseBoonEffect() can
+      // splice out precisely THIS pick's entry later.
+      const frenzyPickId = nextFrenzyPickId++;
       boonEffectState.frenzyPicks.push({
+        frenzyPickId,
         gemId: effect.gem,
         bonus: effect.bonus,
         penalty: effect.penalty,
         penalizedGems,
       });
-      break;
+      return {
+        kind: effect.kind,
+        gem: effect.gem,
+        frenzyPickId,
+        bonus: effect.bonus,
+        penalty: effect.penalty,
+        penalizedGems,
+      };
     }
 
-    // NEW — Jeweler: flat base-score bump applied to EVERY gem in the
-    // catalog at once (active AND locked), no target gem, no
-    // drawback. Distinct from Lush's "every OTHER gem" sweep — there
-    // is no single favored gem here to exclude.
     case 'all_gem_score_delta':
-      ALL_GEM_IDS.forEach(id => {
-        gemBaseState.perGem[id].scoreBonus += effect.amount;
-      });
-      break;
+      ALL_GEM_IDS.forEach(id => { gemBaseState.perGem[id].scoreBonus += effect.amount; });
+      return { kind: effect.kind, scoreAmount: effect.amount, affectedGems: ALL_GEM_IDS.slice() };
 
-    // NEW — Gemologist: same idea as Jeweler, but for base multiplier
-    // instead of base score.
     case 'all_gem_multiplier_delta':
-      ALL_GEM_IDS.forEach(id => {
-        gemBaseState.perGem[id].multiplierBonus += effect.amount;
-      });
-      break;
+      ALL_GEM_IDS.forEach(id => { gemBaseState.perGem[id].multiplierBonus += effect.amount; });
+      return { kind: effect.kind, multiplierAmount: effect.amount, affectedGems: ALL_GEM_IDS.slice() };
 
-    case 'global_score_boost':
-      boonEffectState.globalScoreMultiplier += effect.flatMultiplierDelta || 0;
-      boonEffectState.globalScoreBonus += effect.flatBonusDelta || 0;
-      if (effect.targetPercentIncrease) {
-        boonEffectState.targetScoreMultiplier *= (1 + effect.targetPercentIncrease);
+    case 'global_score_boost': {
+      const multiplierDelta = effect.flatMultiplierDelta || 0;
+      const bonusDelta = effect.flatBonusDelta || 0;
+      boonEffectState.globalScoreMultiplier += multiplierDelta;
+      boonEffectState.globalScoreBonus += bonusDelta;
+
+      // targetScoreMultiplier stacks MULTIPLICATIVELY — record the
+      // exact factor applied (1 + pct) so reversal can divide back
+      // out by that same factor rather than guessing.
+      const targetFactor = effect.targetPercentIncrease ? (1 + effect.targetPercentIncrease) : 1;
+      if (targetFactor !== 1) {
+        boonEffectState.targetScoreMultiplier *= targetFactor;
       }
-      // re-derive the CURRENT level's target now, using the new
-      // multiplier — advanceLevel() already set the old target before
-      // this boon was offered, so refresh it immediately on pick
       progressionState.scoreTarget = calculateScoreTarget(progressionState.level);
-      break;
+
+      return { kind: effect.kind, multiplierDelta, bonusDelta, targetFactor };
+    }
 
     case 'board_expand':
     case 'board_shrink':
     case 'board_expand_and_shrink':
-      // Deliberate no-op here — see prior handoffs for the full
-      // reasoning (a board-shape change needs a player click, so it
-      // can't be applied synchronously here).
-      break;
+      // Deliberate no-op — see prior handoffs. Nothing to reverse
+      // either; flagged `reversible: false` so reverseBoonEffect()
+      // explicitly refuses rather than silently doing nothing.
+      return { kind: effect.kind, reversible: false };
 
     default:
-      // tile boons / other future types — nothing to apply yet
-      break;
+      return { kind: effect.kind, reversible: false };
+  }
+}
+
+/**
+ * NEW — undoes exactly what applyBoonEffect() did for one specific
+ * activeBoon entry, using that entry's stored `appliedEffect` (NOT
+ * re-reading `def` — a random effect's exact targets are only known
+ * from what was actually applied). Call BEFORE removing the entry
+ * from boonState.activeBoons (gameplay/boon.js's removeActiveBoon())
+ * — this function only touches gemBaseState/boonEffectState/
+ * progressionState, never the boon list itself.
+ *
+ * Foundation for the event system's "trade away a boon" (Encounter)
+ * and "lose a random boon" (Elite loss). Per design, a future
+ * level-DOWN boon mechanic is expected to reuse this exact function.
+ *
+ * @param {object} activeBoon - an entry from boonState.activeBoons,
+ *   with a non-null `appliedEffect`.
+ * @returns {boolean} true if the reversal actually undid something;
+ *   false if this pick's effect was flagged non-reversible (currently
+ *   only the board-shape kinds).
+ */
+export function reverseBoonEffect(activeBoon) {
+  const applied = activeBoon?.appliedEffect;
+  if (!applied) return false;
+  if (applied.reversible === false) return false;
+
+  switch (applied.kind) {
+    case 'gem_score_delta':
+      gemBaseState.perGem[applied.gem].scoreBonus -= applied.scoreAmount;
+      return true;
+
+    case 'gem_multiplier_delta':
+      gemBaseState.perGem[applied.gem].multiplierBonus -= applied.multiplierAmount;
+      return true;
+
+    case 'gem_polish':
+      gemBaseState.perGem[applied.gem].scoreBonus -= applied.scoreAmount;
+      gemBaseState.perGem[applied.gem].multiplierBonus -= applied.multiplierAmount;
+      return true;
+
+    // Lush and Brilliance share the same appliedEffect shape
+    // (scoreAmount + penalizedGems + penaltyAmount) — safe to combine.
+    case 'gem_score_lush':
+    case 'gem_score_brilliance':
+      gemBaseState.perGem[applied.gem].scoreBonus -= applied.scoreAmount;
+      applied.penalizedGems.forEach(id => {
+        gemBaseState.perGem[id].scoreBonus -= applied.penaltyAmount;
+      });
+      return true;
+
+    case 'gem_multiplier_addict':
+      gemBaseState.perGem[applied.gem].multiplierBonus -= applied.multiplierAmount;
+      applied.penalizedGems.forEach(id => {
+        gemBaseState.perGem[id].multiplierBonus -= applied.penaltyAmount;
+      });
+      return true;
+
+    case 'affinity':
+      boonEffectState.affinityBonus[applied.gem] = (boonEffectState.affinityBonus[applied.gem] || 0) - applied.amount;
+      return true;
+
+    case 'frenzy': {
+      // Splice out ONLY the exact frenzyPicks entry this pick pushed
+      // — matched by frenzyPickId, never by array position (position
+      // could have shifted if an earlier Frenzy pick was already
+      // removed this run).
+      const idx = boonEffectState.frenzyPicks.findIndex(p => p.frenzyPickId === applied.frenzyPickId);
+      if (idx !== -1) boonEffectState.frenzyPicks.splice(idx, 1);
+      return true;
+    }
+
+    case 'all_gem_score_delta':
+      applied.affectedGems.forEach(id => { gemBaseState.perGem[id].scoreBonus -= applied.scoreAmount; });
+      return true;
+
+    case 'all_gem_multiplier_delta':
+      applied.affectedGems.forEach(id => { gemBaseState.perGem[id].multiplierBonus -= applied.multiplierAmount; });
+      return true;
+
+    case 'global_score_boost':
+      boonEffectState.globalScoreMultiplier -= applied.multiplierDelta;
+      boonEffectState.globalScoreBonus -= applied.bonusDelta;
+      if (applied.targetFactor !== 1) {
+        boonEffectState.targetScoreMultiplier /= applied.targetFactor;
+      }
+      progressionState.scoreTarget = calculateScoreTarget(progressionState.level);
+      return true;
+
+    default:
+      return false;
   }
 }

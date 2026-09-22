@@ -78,6 +78,19 @@ import {
 } from '../resources/constant/constants.js';
 
 import {
+  tryTriggerEvent, buildEncounterOffer, resolveEncounterAccept, resolveEncounterDecline,
+  pickEliteDef, startEliteFight, declineElite, resolveEliteOutcome, getActiveEliteDef,
+  pickChallengeDef, startChallenge, declineChallenge, markChallengeDetonation,
+  resolveChallengeOutcome, getActiveChallengeDef, resetEvents,
+  // NEW — Fortune's Folly / Lost Miner resolvers
+  placeFortunesFollyBet, flipFortunesFollyDoubleOrNothing, payFortunesFollyAndLeave,
+  resolveLostMinerHelp, resolveLostMinerAbsorb,
+} from './event.js';
+import { EVENT_TYPE } from '../resources/event/event.js';
+import { activeEventState } from '../resources/event/event_state.js';
+import { resetCurses } from './curse.js'; // NEW
+
+import {
   GAME_NAME, GAME_TAGLINE, BUTTONS, DIALOG_TITLES, MESSAGES, GAME_VERSION
 } from '../resources/constant/text.js';
 
@@ -129,6 +142,16 @@ const versionTagEl = document.getElementById('version-tag');
 // NEW — the whole "MOVES LEFT" stat block, so it can be hidden
 // entirely when ENABLE_MOVES_LIMIT is off (constants.js).
 const movesStatEl = document.getElementById('moves-stat');
+
+// NEW — objective banner (Elite countdown / Challenge status).
+const objectiveBannerEl = document.getElementById('objective-banner');
+const objectiveTextEl   = document.getElementById('objective-text');
+
+// NEW — the one shared dialog for all three event types.
+const eventDialogEl   = document.getElementById('event-dialog');
+const eventTitleEl    = document.getElementById('event-title');
+const eventStoryEl    = document.getElementById('event-story');
+const eventChoicesEl  = document.getElementById('event-choices');
 
 // --- mutable game state ---
 let grid;
@@ -184,6 +207,11 @@ let currentShopTier = 1;
 // for tidiness; it's always overwritten by openShopDialog() before
 // renderShopDialog() ever reads it.
 let shopEntryScore = 0;
+// NEW — handle for the objective banner's 1-second tick, so the Elite
+// countdown stays live regardless of what else is happening on
+// screen. Started once in init(); left running for the rest of the
+// page's life (it's a cheap no-op whenever nothing is active).
+let objectiveIntervalId = null;
 
 /**
  * Sets every bit of static, non-runtime-dependent text (title,
@@ -540,6 +568,8 @@ function init() {
   resetHistory(); // NEW — clears the panel's backing list for a fresh run
   resetShop(); // NOTE: only if you've already wired this from the old shop system — otherwise skip
   resetBoonShop();
+  resetEvents(); // NEW — alongside every other resetX() call
+  resetCurses(); // NEW — alongside resetEvents()
 
   // resetTiles() (just above, already called) seeds tileState.blockedCells
   // with the starting blocked ring; pre-allocate a fully-blocked grid of
@@ -581,12 +611,15 @@ function init() {
   boonDialogEl.classList.add('hidden');
 
   shopDialogEl.classList.add('hidden');
+  eventDialogEl.classList.add('hidden'); // NEW — alongside the other dialog resets
   shopContinuation = null;
 
   renderSideStats(); // reflect the freshly-reset boon/gem state
   renderBoardWithInteractions();
   renderHistoryPanel(); // NEW — clears the panel's DOM to match the reset list
   scheduleHintTimer(); // NEW — the very first idle moment, before any match has happened yet
+  updateObjectiveBanner(); // NEW — hides the banner on a fresh run (resetEvents() cleared activeEventState)
+  startObjectiveTicker();  // NEW — starts (or restarts) the 1-second countdown tick
 }
 
 /**
@@ -612,6 +645,394 @@ function showScorePopup(text) {
     scorePopupEl.classList.remove('visible');
     scorePopupHideTimeout = null;
   }, SCORE_POPUP_MS);
+}
+
+/** mm:ss display for an Elite countdown, floored at 00:00 once time's up. */
+function formatCountdown(msRemaining) {
+  const clamped = Math.max(0, msRemaining);
+  const totalSeconds = Math.floor(clamped / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+/**
+ * NEW — rebuilds the objective banner's text/visibility from
+ * activeEventState. Called immediately whenever something relevant
+ * changes (a fight starts, a challenge detonates, a level clears) AND
+ * once a second via objectiveIntervalId, so the Elite countdown keeps
+ * ticking even when nothing else is happening.
+ *
+ * @returns {void}
+ */
+function updateObjectiveBanner() {
+  if (activeEventState.type === EVENT_TYPE.ELITE) {
+    const def = getActiveEliteDef();
+    if (!def) { objectiveBannerEl.classList.add('hidden'); return; }
+    const elapsed = Date.now() - activeEventState.eliteStartedAt;
+    const remaining = activeEventState.eliteDurationMs - elapsed;
+    objectiveTextEl.textContent = `⚔ ${def.name} — reach ${progressionState.scoreTarget} before ${formatCountdown(remaining)}`;
+    objectiveBannerEl.classList.remove('hidden');
+  } else if (activeEventState.type === EVENT_TYPE.CHALLENGE) {
+    const def = getActiveChallengeDef();
+    if (!def) { objectiveBannerEl.classList.add('hidden'); return; }
+    objectiveTextEl.textContent = activeEventState.challengeDetonated
+      ? `🔨 ${def.name} — challenge failed (a special gem detonated). Clear the level to move on.`
+      : `🔨 ${def.name} — clear this level without triggering any special gem`;
+    objectiveBannerEl.classList.remove('hidden');
+  } else {
+    objectiveBannerEl.classList.add('hidden');
+  }
+}
+
+/** (Re)starts the 1-second objective-banner tick. Call once from init(). */
+function startObjectiveTicker() {
+  if (objectiveIntervalId) clearInterval(objectiveIntervalId);
+  objectiveIntervalId = setInterval(updateObjectiveBanner, 1000);
+}
+
+/**
+ * NEW — swaps the event dialog's body over to a single result line +
+ * a "Continue" button. Shared tail for every event branch that has
+ * flavor text to show before actually moving on (Encounter's both
+ * outcomes, Elite's Flee). Elite's "Fight" and Challenge's "Accept"
+ * skip this entirely — those close the dialog and start the next
+ * level immediately, since the fight/challenge itself IS the next
+ * level.
+ *
+ * @param {string} text
+ * @param {() => void} onContinue
+ * @returns {void}
+ */
+function showEventResult(text, onContinue) {
+  eventStoryEl.textContent = text;
+  eventChoicesEl.innerHTML = '';
+  const continueBtn = document.createElement('button');
+  continueBtn.textContent = 'Continue';
+  continueBtn.addEventListener('click', () => {
+    eventDialogEl.classList.add('hidden');
+    onContinue();
+  });
+  eventChoicesEl.appendChild(continueBtn);
+}
+
+/**
+ * NEW — dispatches to the right Encounter dialog builder based on
+ * the offer's `kind` (see resources/event/event.js's file header).
+ * Each builder owns its own full flow, including calling
+ * onContinue() once fully resolved.
+ */
+function showEncounterDialog(offer, onContinue) {
+  if (offer.kind === 'trade') {
+    showGemMoleDialog(offer, onContinue);
+  } else if (offer.kind === 'gamble') {
+    showFortunesFollyDialog(offer.def, onContinue);
+  } else if (offer.kind === 'help_or_absorb') {
+    showLostMinerDialog(offer.def, onContinue);
+  } else {
+    onContinue(); // unreachable in practice — safety net
+  }
+}
+
+/** RENAMED from the old showEncounterDialog() — Gem Mole's trade-or-decline flow, unchanged logic. */
+function showGemMoleDialog(offer, onContinue) {
+  const { def, tradeAwayBoon, tradeAwayDef, replacementDef } = offer;
+
+  eventTitleEl.textContent = def.name;
+  eventStoryEl.textContent = def.storyText;
+  eventChoicesEl.innerHTML = '';
+
+  const acceptBtn = document.createElement('button');
+  acceptBtn.textContent = def.acceptLabel;
+  acceptBtn.addEventListener('click', () => {
+    const { givenName, receivedName } = resolveEncounterAccept(tradeAwayBoon, replacementDef);
+    renderSideStats();
+    const resultText = def.resultAcceptText(givenName, receivedName);
+    addHistoryEntry('event', `Encounter — ${def.name}: ${resultText}`, 'event');
+    renderHistoryPanel();
+    showEventResult(resultText, onContinue);
+  });
+
+  const declineBtn = document.createElement('button');
+  declineBtn.textContent = def.declineLabel;
+  declineBtn.addEventListener('click', () => {
+    resolveEncounterDecline();
+    addHistoryEntry('event', `Encounter — ${def.name}: ${def.resultDeclineText}`, 'event');
+    renderHistoryPanel();
+    showEventResult(def.resultDeclineText, onContinue);
+  });
+
+  eventChoicesEl.appendChild(acceptBtn);
+  eventChoicesEl.appendChild(declineBtn);
+  eventDialogEl.classList.remove('hidden');
+}
+
+/**
+ * NEW — Fortune's Folly's INITIAL node: story text + 5 bet buttons +
+ * the "pay 5% and leave" escape hatch. Every bet button funnels into
+ * handleFollyInitialBet(); the pay-and-leave button ends the event
+ * immediately without ever gambling.
+ */
+function showFortunesFollyDialog(def, onContinue) {
+  eventTitleEl.textContent = def.name;
+  eventStoryEl.textContent = def.storyText;
+  eventChoicesEl.innerHTML = '';
+
+  def.betOptions.forEach(opt => {
+    const btn = document.createElement('button');
+    btn.textContent = opt.label;
+    btn.addEventListener('click', () => handleFollyInitialBet(def, opt.percent, onContinue));
+    eventChoicesEl.appendChild(btn);
+  });
+
+  const payBtn = document.createElement('button');
+  payBtn.textContent = def.payAndLeave.label;
+  payBtn.addEventListener('click', () => handleFollyPayAndLeave(def, onContinue));
+  eventChoicesEl.appendChild(payBtn);
+
+  eventDialogEl.classList.remove('hidden');
+}
+
+/** Resolves the very first bet: deducts the wager immediately, then either shows the win node or ends on a loss. */
+function handleFollyInitialBet(def, percent, onContinue) {
+  const { potAmount, won, scoreDelta } = placeFortunesFollyBet(percent, score);
+
+  // The wager leaves score RIGHT NOW, win or lose — see event.js's
+  // doc comment on placeFortunesFollyBet().
+  score += scoreDelta;
+  scoreEl.textContent = score;
+
+  if (won) {
+    const doubledPot = potAmount * 2;
+    addHistoryEntry('event', `Fortune's Folly: you wager ${potAmount} and win — winnings now ${doubledPot}.`, 'positive');
+    renderHistoryPanel();
+    showFollyPostWin(def, doubledPot, def.initialWinText(doubledPot), onContinue);
+  } else {
+    addHistoryEntry('event', `Fortune's Folly: you wager ${potAmount} and lose it.`, 'negative');
+    renderHistoryPanel();
+    showEventResult(def.initialLoseText, onContinue);
+  }
+}
+
+/** "Pay 5% and leave" — the one path that skips the gamble entirely. */
+function handleFollyPayAndLeave(def, onContinue) {
+  const { amount, scoreDelta } = payFortunesFollyAndLeave(score, def.payAndLeave.percent);
+  score += scoreDelta;
+  scoreEl.textContent = score;
+  addHistoryEntry('event', `Fortune's Folly: you pay ${amount} and walk away.`, 'event');
+  renderHistoryPanel();
+  showEventResult(def.payAndLeave.resultText, onContinue);
+}
+
+/**
+ * The "post-win" node: shown right after ANY win (initial bet or a
+ * Double-or-Nothing round), offering Double-or-Nothing again or
+ * cashing out. This is the loop — handleFollyDoubleOrNothing() below
+ * calls right back into this same function on another win, which is
+ * what lets the player keep doubling with no hard cap.
+ *
+ * @param {object} def
+ * @param {number} pot - the CURRENT winnings, already doubled.
+ * @param {string} introText - the flavor text to show for how THIS
+ *   particular win just happened (differs for the initial win vs. a
+ *   Double-or-Nothing win).
+ * @param {() => void} onContinue
+ */
+function showFollyPostWin(def, pot, introText, onContinue) {
+  eventTitleEl.textContent = def.name;
+  eventStoryEl.textContent = introText;
+  eventChoicesEl.innerHTML = '';
+
+  const doubleBtn = document.createElement('button');
+  doubleBtn.textContent = def.doubleLabel;
+  doubleBtn.addEventListener('click', () => handleFollyDoubleOrNothing(def, pot, onContinue));
+
+  const cashOutBtn = document.createElement('button');
+  cashOutBtn.textContent = def.cashOutLabel;
+  cashOutBtn.addEventListener('click', () => handleFollyCashOut(def, pot, onContinue));
+
+  eventChoicesEl.appendChild(doubleBtn);
+  eventChoicesEl.appendChild(cashOutBtn);
+  eventDialogEl.classList.remove('hidden'); // already open — idempotent, kept for clarity
+}
+
+/** One Double-or-Nothing flip. A win loops back into showFollyPostWin(); a loss ends the event with no further score change. */
+function handleFollyDoubleOrNothing(def, pot, onContinue) {
+  const { won, newPot } = flipFortunesFollyDoubleOrNothing(pot);
+
+  if (won) {
+    addHistoryEntry('event', `Fortune's Folly: double or nothing — winnings now ${newPot}.`, 'positive');
+    renderHistoryPanel();
+    showFollyPostWin(def, newPot, def.doubleOrNothingWinText(newPot), onContinue);
+  } else {
+    // NOTE — no score change here at all. The only score deduction
+    // for the WHOLE event happened once, at the initial bet — every
+    // Double-or-Nothing round since then has only ever changed the
+    // in-play pot, never score itself. See event.js's doc comment.
+    addHistoryEntry('event', "Fortune's Folly: double or nothing — fortune turns against you. Winnings lost.", 'negative');
+    renderHistoryPanel();
+    showEventResult(def.doubleOrNothingLoseText, onContinue);
+  }
+}
+
+/** Cashes out: credits the current pot to score and ends the event. */
+function handleFollyCashOut(def, pot, onContinue) {
+  score += pot;
+  scoreEl.textContent = score;
+  addHistoryEntry('event', `Fortune's Folly: you cash out ${pot} and leave the table.`, 'positive');
+  renderHistoryPanel();
+  showEventResult(def.callItADayText(pot), onContinue);
+}
+
+/** NEW — Lost Miner's three-way choice (help / absorb / leave). */
+function showLostMinerDialog(def, onContinue) {
+  eventTitleEl.textContent = def.name;
+  eventStoryEl.textContent = def.storyText;
+  eventChoicesEl.innerHTML = '';
+
+  const helpBtn = document.createElement('button');
+  helpBtn.textContent = def.helpLabel;
+  helpBtn.addEventListener('click', () => {
+    const { scoreDelta } = resolveLostMinerHelp(score, def);
+    score += scoreDelta;
+    scoreEl.textContent = score;
+    addHistoryEntry('event', `Lost Miner: you free the miner and receive ${scoreDelta} score.`, 'positive');
+    renderHistoryPanel();
+    showEventResult(def.helpResultText(scoreDelta), onContinue);
+  });
+
+  const absorbBtn = document.createElement('button');
+  absorbBtn.textContent = def.absorbLabel;
+  absorbBtn.addEventListener('click', () => {
+    const { grantedBoonName, curseName } = resolveLostMinerAbsorb();
+    renderSideStats(); // the boon AND the curse both touched gemBaseState/boonEffectState
+    const boonPart = grantedBoonName || 'nothing of value';
+    const text = def.absorbResultText(boonPart, curseName);
+    addHistoryEntry('event', `Lost Miner: ${text}`, 'negative');
+    renderHistoryPanel();
+    showEventResult(text, onContinue);
+  });
+
+  const leaveBtn = document.createElement('button');
+  leaveBtn.textContent = def.leaveLabel;
+  leaveBtn.addEventListener('click', () => {
+    addHistoryEntry('event', `Lost Miner: ${def.leaveResultText}`, 'event');
+    renderHistoryPanel();
+    showEventResult(def.leaveResultText, onContinue);
+  });
+
+  eventChoicesEl.appendChild(helpBtn);
+  eventChoicesEl.appendChild(absorbBtn);
+  eventChoicesEl.appendChild(leaveBtn);
+  eventDialogEl.classList.remove('hidden');
+}
+
+/** Builds and shows the Elite dialog (fight-or-flee). */
+function showEliteDialog(def, onContinue) {
+  eventTitleEl.textContent = def.name;
+  eventStoryEl.textContent = def.storyText;
+  eventChoicesEl.innerHTML = '';
+
+  const fightBtn = document.createElement('button');
+  fightBtn.textContent = def.fightLabel;
+  fightBtn.addEventListener('click', () => {
+    // Double THIS level's target and start the fight's timer/state
+    // together, right now — the doubled target needs to be in place
+    // the instant the next level actually begins.
+    progressionState.scoreTarget = Math.round(progressionState.scoreTarget * def.targetMultiplier);
+    targetEl.textContent = progressionState.scoreTarget;
+    startEliteFight(def);
+    addHistoryEntry('event', `Elite — ${def.name}: you accept the fight!`, 'event');
+    renderHistoryPanel();
+    updateObjectiveBanner();
+    eventDialogEl.classList.add('hidden');
+    onContinue(); // the fight IS the next level — start it immediately, no "Continue" wait
+  });
+
+  const fleeBtn = document.createElement('button');
+  fleeBtn.textContent = def.fleeLabel;
+  fleeBtn.addEventListener('click', () => {
+    declineElite(def);
+    renderSideStats(); // in case a future Elite's declinePenalty ever touches stats
+    addHistoryEntry('event', `Elite — ${def.name}: ${def.fleeText}`, 'event');
+    renderHistoryPanel();
+    showEventResult(def.fleeText, onContinue);
+  });
+
+  eventChoicesEl.appendChild(fightBtn);
+  eventChoicesEl.appendChild(fleeBtn);
+  eventDialogEl.classList.remove('hidden');
+}
+
+/** Builds and shows the Challenge dialog (accept-or-decline). */
+function showChallengeDialog(def, onContinue) {
+  eventTitleEl.textContent = def.name;
+  eventStoryEl.textContent = def.storyText;
+  eventChoicesEl.innerHTML = '';
+
+  const acceptBtn = document.createElement('button');
+  acceptBtn.textContent = def.acceptLabel;
+  acceptBtn.addEventListener('click', () => {
+    startChallenge(def);
+    addHistoryEntry('event', `Challenge — ${def.name}: you accept!`, 'event');
+    renderHistoryPanel();
+    updateObjectiveBanner();
+    eventDialogEl.classList.add('hidden');
+    onContinue(); // the challenge IS the next level — start it immediately
+  });
+
+  const declineBtn = document.createElement('button');
+  declineBtn.textContent = def.declineLabel;
+  declineBtn.addEventListener('click', () => {
+    declineChallenge();
+    addHistoryEntry('event', `Challenge — ${def.name}: you decline.`, 'event');
+    renderHistoryPanel();
+    eventDialogEl.classList.add('hidden');
+    onContinue();
+  });
+
+  eventChoicesEl.appendChild(acceptBtn);
+  eventChoicesEl.appendChild(declineBtn);
+  eventDialogEl.classList.remove('hidden');
+}
+
+/**
+ * NEW — the single entry point for "an event MIGHT happen right
+ * now." Rolls against the chance ladder; if nothing fires, calls
+ * onContinue() immediately (the common case). If something fires,
+ * shows the matching dialog, which itself calls onContinue() once the
+ * player has made their choice (and, for Encounter/Elite-flee, once
+ * they've dismissed the result text).
+ *
+ * @param {() => void} onContinue - what happens once the event system
+ *   is fully done deciding/resolving (i.e. "actually start the next
+ *   level now").
+ * @returns {void}
+ */
+function attemptEvent(onContinue) {
+  // CHANGED — score is now passed in, since tryTriggerEvent()/
+  // buildEncounterOffer() need it for Fortune's Folly's "score > 0"
+  // eligibility rule.
+  const type = tryTriggerEvent(score);
+  if (!type) { onContinue(); return; }
+
+  if (type === EVENT_TYPE.ENCOUNTER) {
+    const offer = buildEncounterOffer(score);
+    if (!offer) { onContinue(); return; }
+    showEncounterDialog(offer, onContinue);
+  } else if (type === EVENT_TYPE.ELITE) {
+    // CHANGED — pickEliteDef() can now return null (every Elite
+    // already seen this run); guard rather than assume it succeeds.
+    const def = pickEliteDef();
+    if (!def) { onContinue(); return; }
+    showEliteDialog(def, onContinue);
+  } else if (type === EVENT_TYPE.CHALLENGE) {
+    const def = pickChallengeDef();
+    if (!def) { onContinue(); return; }
+    showChallengeDialog(def, onContinue);
+  } else {
+    onContinue();
+  }
 }
 
 /**
@@ -648,7 +1069,26 @@ function applyScoreGain(gained, popupText) {
   const levelBeforeGain = progressionState.level;
 
   let leveledUp = false;
+  // NEW — captured here so the elite/challenge result lines can be
+  // logged AFTER the normal level-cleared line, in reading order.
+  let eliteOutcome = null;
+  let challengeOutcome = null;
+
   while (score >= progressionState.scoreTarget) {
+    // NEW — resolve any Elite/Challenge attached to the level being
+    // cleared RIGHT NOW, before advanceLevel() moves
+    // progressionState.level forward. Both resolve functions no-op
+    // (return null) if nothing of that type is active for THIS level,
+    // so it's safe to call both unconditionally every iteration —
+    // this also correctly handles the rare case of a single huge gain
+    // crossing more than one level at once.
+    if (activeEventState.type === EVENT_TYPE.ELITE && activeEventState.eliteForLevel === progressionState.level) {
+      eliteOutcome = resolveEliteOutcome();
+    }
+    if (activeEventState.type === EVENT_TYPE.CHALLENGE && activeEventState.challengeForLevel === progressionState.level) {
+      challengeOutcome = resolveChallengeOutcome();
+    }
+
     advanceLevel();
     // Bonus moves on level-up only mean anything if moves are being
     // tracked at all — skip the grant when the mechanic is off.
@@ -656,6 +1096,20 @@ function applyScoreGain(gained, popupText) {
       moves += LEVEL_UP_BONUS_MOVES;
     }
     leveledUp = true;
+  }
+
+  // NEW — log the Elite/Challenge outcome (if any) right after the
+  // score-gaiinit(line, before the level-cleared line below.
+  if (eliteOutcome) {
+    renderSideStats(); // the win/lose reward or penalty touched gemBaseState
+    addHistoryEntry('event', `Elite result: ${eliteOutcome.resultText}`, eliteOutcome.won ? 'positive' : 'negative');
+  }
+  if (challengeOutcome && challengeOutcome.resultText) {
+    renderSideStats();
+    addHistoryEntry('event', `Challenge result: ${challengeOutcome.resultText}`, 'positive');
+  }
+  if (eliteOutcome || challengeOutcome) {
+    updateObjectiveBanner(); // clears the banner now that the modifier is resolved
   }
 
   // NEW — log this gain into the History panel. Tone is derived
@@ -885,6 +1339,12 @@ function advanceTilePlacement() {
  * @returns {void}
  */
 function finishSwapActivatedCombo(clearedCells, gained, popupText) {
+  // NEW — every one of the 7 swap-activated combos IS, by definition,
+  // a "detonation" for the no-detonation Challenge. Marking it once
+  // here (rather than in all 7 handler functions) covers every case.
+  markChallengeDetonation();
+  updateObjectiveBanner();
+
   if (ENABLE_MOVES_LIMIT) {
     moves--;
     movesEl.textContent = moves;
@@ -1240,6 +1700,13 @@ function resolveMatches(swapCells = null) {
   comboCount++;
 
   const { clearedCells, spawns, matchedGroups, incidentalCells } = resolveSpecialGems(grid, matched, swapCells);
+  // NEW — a non-empty incidentalCells list means a Laser/Discharger's
+  // PASSIVE blast fired as part of this match/chain-reaction — that's
+  // a detonation too, distinct from the swap-activated combos above.
+  if (incidentalCells.length > 0) {
+    markChallengeDetonation();
+    updateObjectiveBanner();
+  }
   applySpawns(spawns);
 
   const gained = calculateCascadeStepScore({ matchedGroups, incidentalCells, comboCount });
@@ -1324,23 +1791,37 @@ function showBoonDialog(onContinue) {
   boonChoicesEl.innerHTML = '';
   offer.forEach(def => {
     const card = document.createElement('div');
-    card.className = 'boon-card';
+    // CHANGED — rarity modifier class added here, e.g.
+    // "boon-card boon-card--epic". This single class is what drives
+    // both the card's border color AND its footer badge color (see
+    // dialog.css's .boon-card--<rarity> rules).
+    card.className = `boon-card boon-card--${def.rarity}`;
 
     const gemDef = def.effect?.gem ? ALL_GEM_CATALOG.find(g => g.id === def.effect.gem) : null;
     const iconHtml = gemDef
       ? `<img class="boon-card-gem-icon" src="css/model/svg/${gemDef.file}" alt="${gemDef.name}">`
       : '';
 
+    // CHANGED — description now carries its own class (boon-card-desc)
+    // so it can flex-grow to fill the taller card, plus a new footer
+    // div showing the rarity as a small uppercase text badge.
     card.innerHTML = `
       <div class="boon-card-header">
         ${iconHtml}
         <h3>${def.name}</h3>
       </div>
-      <p>${def.description}</p>
+      <p class="boon-card-desc">${def.description}</p>
+      <div class="boon-card-footer">
+        <span class="boon-card-rarity">${def.rarity}</span>
+      </div>
     `;
     card.addEventListener('click', () => {
-      pickBoon(def.id);
-      applyBoonEffect(def);
+      // CHANGED — capture the activeBoon entry and attach its
+      // appliedEffect, so the event system (trade/loss) can reverse
+      // this EXACT pick later. Every boon-granting call site in the
+      // game now follows this same two-line pattern.
+      const activeBoon = pickBoon(def.id);
+      activeBoon.appliedEffect = applyBoonEffect(def);
       renderSideStats();
       boonDialogEl.classList.add('hidden');
 
@@ -1395,19 +1876,21 @@ function proceedAfterBoonPick(def, onContinue) {
     def.effect.kind === 'board_shrink' ||
     def.effect.kind === 'board_expand_and_shrink';
 
+  // NEW — the real "start the next level" step now goes through the
+  // event system first. Every existing continuation
+  // (afterShop / startTilePlacement's own onContinue) now points HERE
+  // instead of directly at the caller's onContinue — this is the "one
+  // check, right before the next level begins" hook point.
+  const continueToNextLevel = () => attemptEvent(onContinue);
+
   const afterShop = () => {
     if (isBoardShapeBoon) {
-      startTilePlacement(def, onContinue);
+      startTilePlacement(def, continueToNextLevel);
     } else {
-      onContinue();
+      continueToNextLevel();
     }
   };
 
-  // progressionState.level has ALREADY advanced (advanceLevel() runs
-  // inside applyScoreGain(), well before the boon dialog opens) — so
-  // "the level that was just cleared" is level - 1, not the current
-  // level. shouldOpenShop() checks THAT cleared level against the
-  // every-5 cadence.
   const levelJustCleared = progressionState.level - 1;
   if (shouldOpenShop(levelJustCleared)) {
     openShopDialog(afterShop);
@@ -1454,7 +1937,9 @@ function renderShopDialog() {
     const canAfford = score >= price;
 
     const card = document.createElement('div');
-    card.className = 'shop-card';
+    // CHANGED — rarity class added, same convention as the boon
+    // dialog's cards above.
+    card.className = `shop-card shop-card--${def.rarity}`;
     if (alreadyBought) card.classList.add('shop-card--bought');
     else if (!canAfford) card.classList.add('shop-card--unaffordable');
 
@@ -1501,8 +1986,8 @@ function buyBoonFromShop(def, price) {
   score -= price;
   scoreEl.textContent = score;
 
-  pickBoon(def.id);
-  applyBoonEffect(def);
+  const activeBoon = pickBoon(def.id);
+  activeBoon.appliedEffect = applyBoonEffect(def);
   markBoonPurchased(def.id);
 
   // Reuses the same 'boon' tone the free pick uses, so the log reads
