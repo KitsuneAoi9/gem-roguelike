@@ -2,24 +2,12 @@
 // EVENT.JS (gameplay) — Encounter/Elite/Challenge trigger, offer
 // building, and outcome resolution.
 //
-// NEW THIS ROUND:
-//   - Once-per-run tracking: eventState.seenEventIds. Every trigger/
-//     pick function now filters its pool through this before rolling,
-//     and marks whichever specific def gets chosen as seen IMMEDIATELY
-//     (before the player has even made a choice) — "seen" means
-//     "was shown", not "was won".
-//   - ENCOUNTER_POOL now holds 3 differently-shaped entries
-//     (kind: 'trade' | 'gamble' | 'help_or_absorb'). buildEncounterOffer()
-//     dispatches on `kind` to decide what extra data (if any) the
-//     offer needs; main.js's showEncounterDialog() dispatches on the
-//     SAME field to pick which dialog renderer to use.
-//   - Fortune's Folly (gamble) and Lost Miner (help_or_absorb) each
-//     get their own small set of pure resolver functions — pure in
-//     the sense that they take the live score/pot as a PARAMETER and
-//     return a delta/result rather than reaching into main.js's
-//     module-scoped `score` variable directly (main.js doesn't expose
-//     that, and shouldn't need to — same "gameplay computes, main.js
-//     applies" split as every other feature in this codebase).
+// REWORKED THIS ROUND — the Elite section is a full rewrite. The old
+// single-shape Gem Elitist is gone; three structurally different
+// fights now share one generalized engine driven entirely by each
+// ELITE_POOL entry's `winCondition`/`onWin`/`onLose`/`decline` tagged
+// unions (see resources/event/event.js's file header). Encounter/
+// Challenge sections below are UNCHANGED from the prior round.
 // ============================================================
 
 import { BOON_POOL, BOON_RARITY } from '../resources/boon/boon.js';
@@ -30,23 +18,32 @@ import {
   ENCOUNTER_POOL, ELITE_POOL, CHALLENGE_POOL,
 } from '../resources/event/event.js';
 import { CURSE_POOL } from '../resources/curse/curse.js';
+import { GEM_DEFINITIONS } from '../resources/constant/constants.js';
 import { progressionState } from '../resources/progression/progression.js';
 import { boonState } from '../resources/boon/boon_state.js';
+import { boonEffectState } from '../resources/boon/boon_effect_state.js';
 import {
   isBoonAvailable, pickBoon, grantBoonBypassingCap, removeActiveBoon, generateBoonOffer,
 } from './boon.js';
 import { applyBoonEffect, reverseBoonEffect } from './boon_effects.js';
+import { calculateScoreTarget } from './progression.js';
 import { grantCurse } from './curse.js';
 import { PLACEMENT_ONLY_KINDS } from './boon_shop.js';
+import { countGemClears, calculateGemAttributedScore } from './score.js';
 
-/** Marks an event id as having fired — shared by all three event types, regardless of outcome. */
+/** Marks an event id as having fired — shared by all 3 event types, regardless of outcome. */
 function markEventSeen(id) {
   if (!eventState.seenEventIds.includes(id)) {
     eventState.seenEventIds.push(id);
   }
 }
 
-/** Every BOON_POOL entry of a given rarity safe to hand out as a random event reward — see prior round's doc comment. */
+/** Resolves a value that might be a plain value OR a function taking `...args` — used for text fields that need to reflect a specific outcome (e.g. which boons were granted/lost). */
+function resolveMaybeFn(value, ...args) {
+  return typeof value === 'function' ? value(...args) : value;
+}
+
+/** Every BOON_POOL entry of a given rarity safe to hand out as a random event reward. */
 function candidatePoolForRarity(rarity, bypassCap) {
   return BOON_POOL.filter(def => {
     if (def.rarity !== rarity) return false;
@@ -61,7 +58,6 @@ function candidatePoolForRarity(rarity, bypassCap) {
 // TRIGGER ROLL
 // ============================================================
 
-/** A same-rarity, different-id, currently-available replacement for `givenDef`, or null. */
 function findReplacementBoon(givenDef) {
   const candidates = BOON_POOL.filter(d =>
     d.rarity === givenDef.rarity &&
@@ -101,9 +97,8 @@ function isEncounterEligible(def, currentScore) {
 
   if (def.kind === 'trade') return hasValidEncounterCandidate();
   if (def.kind === 'gamble') return currentScore > 0;
-  if (def.kind === 'help_or_absorb') return true; // always valid — no prerequisite at all
-
-  return true; // unknown kind — fail open rather than silently excluding it
+  if (def.kind === 'help_or_absorb') return true;
+  return true;
 }
 
 function hasEligibleEncounter(currentScore) {
@@ -119,21 +114,10 @@ function hasEligibleChallenge() {
 }
 
 /**
- * Rolls whether an event fires at all this level-up, and if so, which
- * type — re-normalizing EVENT_TYPE_WEIGHTS over whichever types
- * currently have at least one unseen, eligible def.
+ * Rolls whether an event fires this level-up, and if so, which type.
  *
- * NEW — if the roll succeeds (an event "wants" to fire) but NO type
- * is currently eligible (every event this run has already fired at
- * least once — the natural end-state once all pools are exhausted),
- * this is treated exactly like "no event" for ramp purposes: the
- * chance ladder still advances rather than getting stuck resetting to
- * 5% over and over for a roll that can never actually produce
- * anything.
- *
- * @param {number} currentScore - live score, forwarded to the
- *   Encounter eligibility check (Fortune's Folly's score>0 rule).
- * @returns {string|null} an EVENT_TYPE value, or null.
+ * @param {number} currentScore
+ * @returns {string|null}
  */
 export function tryTriggerEvent(currentScore) {
   const chance = EVENT_CHANCE_LADDER[eventState.chanceIndex];
@@ -149,7 +133,7 @@ export function tryTriggerEvent(currentScore) {
     return null;
   }
 
-  eventState.chanceIndex = 0; // an event fires — reset the ramp
+  eventState.chanceIndex = 0;
 
   const totalWeight = eligible.reduce((sum, e) => sum + e.weight, 0);
   let roll2 = Math.random() * totalWeight;
@@ -157,11 +141,11 @@ export function tryTriggerEvent(currentScore) {
     roll2 -= entry.weight;
     if (roll2 < 0) return entry.type;
   }
-  return eligible[eligible.length - 1].type; // floating-point safety net
+  return eligible[eligible.length - 1].type;
 }
 
 // ============================================================
-// ENCOUNTER — dispatch + per-kind offer builders
+// ENCOUNTER (UNCHANGED this round)
 // ============================================================
 
 /**
@@ -201,32 +185,21 @@ export function buildEncounterOffer(currentScore) {
   return { kind: def.kind, def };
 }
 
-/** Executes a Gem Mole trade: reverse+remove the outgoing boon, pick+apply the incoming one through the normal capped path. */
 export function resolveEncounterAccept(tradeAwayBoon, replacementDef) {
   const tradeAwayDef = BOON_POOL.find(b => b.id === tradeAwayBoon.id);
-
   reverseBoonEffect(tradeAwayBoon);
   removeActiveBoon(tradeAwayBoon.pickId);
-
   const newActiveBoon = pickBoon(replacementDef.id);
   newActiveBoon.appliedEffect = applyBoonEffect(replacementDef);
-
   return { givenName: tradeAwayDef.name, receivedName: replacementDef.name };
 }
 
-/** Declining a Gem Mole trade is a pure no-op. */
 export function resolveEncounterDecline() {
-  // Intentionally empty — see prior round's doc comment.
+  // Intentionally empty.
 }
 
 // ============================================================
-// FORTUNE'S FOLLY — pure resolver functions
-//
-// None of these touch `score` directly (this file has no access to
-// main.js's module-scoped score variable, by design) — each takes
-// whatever inputs it needs as parameters and returns either a
-// scoreDelta for main.js to apply, or a pot/won pair for main.js to
-// carry forward into the next dialog node.
+// FORTUNE'S FOLLY (UNCHANGED this round)
 // ============================================================
 
 /**
@@ -243,7 +216,7 @@ export function resolveEncounterDecline() {
  */
 export function placeFortunesFollyBet(betPercent, currentScore) {
   const potAmount = Math.round(currentScore * betPercent);
-  const won = Math.random() < 0.5; // plain 50/50, no scaling with pot size — per design
+  const won = Math.random() < 0.5;
   return { potAmount, won, scoreDelta: -potAmount };
 }
 
@@ -275,7 +248,7 @@ export function payFortunesFollyAndLeave(currentScore, percent) {
 }
 
 // ============================================================
-// LOST MINER — pure resolver functions
+// LOST MINER (UNCHANGED this round)
 // ============================================================
 
 /**
@@ -328,8 +301,18 @@ export function resolveLostMinerAbsorb() {
 }
 
 // ============================================================
-// ELITE (unchanged this round, aside from seen-tracking)
+// ELITE — generalized engine (REWRITTEN this round)
 // ============================================================
+
+/** Every unlocked active gem id — the pool gem_cap/gem_subscore_race pick their target from ("a random unlocked gem type"). */
+function pickRandomUnlockedGemId() {
+  const candidates = GEM_DEFINITIONS.map(g => g.id).filter(id => gemUnlockState.unlocked[id]);
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+function gemNameForId(gemId) {
+  return GEM_DEFINITIONS.find(g => g.id === gemId)?.name || gemId;
+}
 
 /** Picks one eligible, unseen Elite def and marks it seen immediately, or null if none remain. */
 export function pickEliteDef() {
@@ -340,17 +323,49 @@ export function pickEliteDef() {
   return def;
 }
 
-export function getActiveEliteDef() {
-  if (activeEventState.type !== EVENT_TYPE.ELITE) return null;
-  return ELITE_POOL.find(d => d.id === activeEventState.eliteDefId) || null;
-}
-
-export function startEliteFight(def) {
+/**
+ * Begins an Elite fight. Fully sets up whichever win-condition this
+ * def uses:
+ *   - time_race: doubles THIS level's target directly (auto-reverts
+ *     once advanceLevel() recomputes a fresh target next level — no
+ *     explicit "undo" needed) and starts the clock.
+ *   - gem_cap / gem_subscore_race: rolls a random unlocked gem to
+ *     track and resets its counters. gem_subscore_race additionally
+ *     computes its threshold from THIS level's target and the score
+ *     the player had the moment the fight began.
+ *
+ * @param {object} def - an ELITE_POOL entry.
+ * @param {number} currentScore - score at the moment the fight is
+ *   accepted (only used by gem_subscore_race's threshold calc).
+ * @returns {void}
+ */
+export function startEliteFight(def, currentScore) {
   activeEventState.type = EVENT_TYPE.ELITE;
   activeEventState.eliteDefId = def.id;
   activeEventState.eliteForLevel = progressionState.level;
-  activeEventState.eliteStartedAt = Date.now();
-  activeEventState.eliteDurationMs = def.timeLimitMs;
+
+  // Reset every win-condition-specific field up front so a def
+  // switching kind between runs never inherits stale state.
+  activeEventState.eliteStartedAt = null;
+  activeEventState.eliteDurationMs = null;
+  activeEventState.eliteGemId = null;
+  activeEventState.eliteGemClearCount = 0;
+  activeEventState.eliteCapBreached = false;
+  activeEventState.eliteGemSubscore = 0;
+  activeEventState.eliteSubscoreThreshold = 0;
+
+  const wc = def.winCondition;
+  if (wc.kind === 'time_race') {
+    progressionState.scoreTarget = Math.round(progressionState.scoreTarget * wc.targetMultiplier);
+    activeEventState.eliteStartedAt = Date.now();
+    activeEventState.eliteDurationMs = wc.timeLimitMs;
+  } else if (wc.kind === 'gem_cap') {
+    activeEventState.eliteGemId = pickRandomUnlockedGemId();
+  } else if (wc.kind === 'gem_subscore_race') {
+    activeEventState.eliteGemId = pickRandomUnlockedGemId();
+    const levelTarget = progressionState.scoreTarget;
+    activeEventState.eliteSubscoreThreshold = Math.max(0, Math.floor(wc.thresholdPercent * (levelTarget - currentScore)));
+  }
 }
 
 function clearEliteState() {
@@ -359,41 +374,220 @@ function clearEliteState() {
   activeEventState.eliteForLevel = null;
   activeEventState.eliteStartedAt = null;
   activeEventState.eliteDurationMs = null;
+  activeEventState.eliteGemId = null;
+  activeEventState.eliteGemClearCount = 0;
+  activeEventState.eliteCapBreached = false;
+  activeEventState.eliteGemSubscore = 0;
+  activeEventState.eliteSubscoreThreshold = 0;
 }
 
-export function declineElite(def) {
-  if (!def.declinePenalty) return { penaltyApplied: false };
-  applyEventPenalty(def.declinePenalty);
-  return { penaltyApplied: true };
+/**
+ * Applies one onWin/onLose/decline-penalty effect descriptor. Single
+ * dispatcher for the Elite outcome-effect tagged union, mirroring
+ * boon_effects.js's applyBoonEffect() pattern. Returns whatever
+ * changed so the caller (resolveEliteOutcome()/declineElite()) can
+ * both apply it to `score` (via the returned scoreDelta — this file
+ * has no access to main.js's score variable) and interpolate it into
+ * result text (grantedNames/removedNames).
+ *
+ * @param {object} effectSpec - an onWin/onLose/decline.penalty value.
+ * @param {number} currentScore
+ * @returns {{ scoreDelta: number, grantedNames: string[], removedNames: string[] }}
+ */
+function applyEliteOutcomeEffect(effectSpec, currentScore) {
+  switch (effectSpec.kind) {
+    case 'grant_boons': {
+      const pool = candidatePoolForRarity(effectSpec.rarity, effectSpec.bypassCap);
+      const grantedNames = [];
+      for (let i = 0; i < effectSpec.count && pool.length > 0; i++) {
+        const rewardDef = pool[Math.floor(Math.random() * pool.length)];
+        const activeBoon = effectSpec.bypassCap ? grantBoonBypassingCap(rewardDef.id) : pickBoon(rewardDef.id);
+        if (activeBoon) {
+          activeBoon.appliedEffect = applyBoonEffect(rewardDef);
+          grantedNames.push(rewardDef.name);
+        }
+      }
+      return { scoreDelta: 0, grantedNames, removedNames: [] };
+    }
+
+    case 'lose_random_boons': {
+      const removedNames = [];
+      for (let i = 0; i < effectSpec.count; i++) {
+        if (boonState.activeBoons.length === 0) break;
+        const victim = boonState.activeBoons[Math.floor(Math.random() * boonState.activeBoons.length)];
+        const victimDef = BOON_POOL.find(b => b.id === victim.id);
+        if (victimDef) removedNames.push(victimDef.name);
+        reverseBoonEffect(victim);
+        removeActiveBoon(victim.pickId);
+      }
+      return { scoreDelta: 0, grantedNames: [], removedNames };
+    }
+
+    case 'target_percent': {
+      // PERMANENT — stacks into the same multiplicative
+      // targetScoreMultiplier the global-score boons use, so it
+      // affects every future level's target, not just this one.
+      boonEffectState.targetScoreMultiplier *= (1 + effectSpec.percent);
+      progressionState.scoreTarget = calculateScoreTarget(progressionState.level);
+      return { scoreDelta: 0, grantedNames: [], removedNames: [] };
+    }
+
+    case 'score_percent': {
+      // One-time swing against currentScore — NOT stored anywhere;
+      // the caller applies this delta to the live score variable.
+      const amount = Math.round(currentScore * effectSpec.percent);
+      return { scoreDelta: amount, grantedNames: [], removedNames: [] };
+    }
+
+    default:
+      return { scoreDelta: 0, grantedNames: [], removedNames: [] };
+  }
 }
 
-export function resolveEliteOutcome() {
+/**
+ * Declining an Elite fight. Dispatches on `def.decline.kind`:
+ *   - 'free': no consequence at all.
+ *   - 'fixed_penalty': always applies `decline.penalty`.
+ *   - 'coinflip_penalty': 50/50 — success is free, failure applies
+ *     `decline.penalty` (Gem Cultivator's "Slip away").
+ *
+ * @param {object} def
+ * @param {number} currentScore
+ * @returns {{ penaltyApplied: boolean, scoreDelta: number, resultText: string, coinFlipResult: 'success'|'failure'|null }}
+ */
+export function declineElite(def, currentScore) {
+  const decline = def.decline;
+
+  if (decline.kind === 'free') {
+    return { penaltyApplied: false, scoreDelta: 0, resultText: def.declineText, coinFlipResult: null };
+  }
+
+  if (decline.kind === 'fixed_penalty') {
+    const { scoreDelta, removedNames } = applyEliteOutcomeEffect(decline.penalty, currentScore);
+    const resultText = resolveMaybeFn(def.declineText, removedNames);
+    return { penaltyApplied: true, scoreDelta, resultText, coinFlipResult: null };
+  }
+
+  if (decline.kind === 'coinflip_penalty') {
+    const success = Math.random() < 0.5;
+    if (success) {
+      return { penaltyApplied: false, scoreDelta: 0, resultText: decline.successText, coinFlipResult: 'success' };
+    }
+    const { scoreDelta } = applyEliteOutcomeEffect(decline.penalty, currentScore);
+    return { penaltyApplied: true, scoreDelta, resultText: decline.failureText, coinFlipResult: 'failure' };
+  }
+
+  return { penaltyApplied: false, scoreDelta: 0, resultText: '', coinFlipResult: null };
+}
+
+/**
+ * NEW — call this after EVERY cascade step (normal match resolution
+ * AND every swap-activated combo) while an Elite fight is active, so
+ * gem_cap/gem_subscore_race tracking stays live. No-ops instantly if
+ * no Elite is active or the active Elite doesn't use a gem-tracking
+ * win-condition — safe to call unconditionally from main.js.
+ *
+ * @param {{gemType:number,length:number}[]} matchedGroups
+ * @param {{gemType:number,row:number,col:number}[]} incidentalCells
+ * @param {number} comboCount
+ * @returns {void}
+ */
+export function recordEliteGemActivity(matchedGroups, incidentalCells, comboCount) {
+  if (activeEventState.type !== EVENT_TYPE.ELITE) return;
+  const def = ELITE_POOL.find(d => d.id === activeEventState.eliteDefId);
+  if (!def) return;
+
+  if (def.winCondition.kind === 'gem_cap') {
+    const cleared = countGemClears(activeEventState.eliteGemId, matchedGroups, incidentalCells);
+    if (cleared > 0) {
+      activeEventState.eliteGemClearCount += cleared;
+      if (activeEventState.eliteGemClearCount > def.winCondition.gemCap) {
+        activeEventState.eliteCapBreached = true;
+      }
+    }
+  } else if (def.winCondition.kind === 'gem_subscore_race') {
+    const attributed = calculateGemAttributedScore(activeEventState.eliteGemId, matchedGroups, incidentalCells, comboCount);
+    if (attributed !== 0) {
+      activeEventState.eliteGemSubscore += attributed;
+    }
+  }
+}
+
+/**
+ * NEW — plain-data snapshot of the active Elite's progress, for
+ * main.js's objective banner. Returns null if no Elite is active.
+ *
+ * @returns {object|null}
+ */
+export function getEliteProgressInfo() {
+  if (activeEventState.type !== EVENT_TYPE.ELITE) return null;
+  const def = ELITE_POOL.find(d => d.id === activeEventState.eliteDefId);
+  if (!def) return null;
+
+  const kind = def.winCondition.kind;
+  if (kind === 'time_race') {
+    return { kind, name: def.name };
+  }
+  if (kind === 'gem_cap') {
+    return {
+      kind, name: def.name,
+      gemName: gemNameForId(activeEventState.eliteGemId),
+      count: activeEventState.eliteGemClearCount,
+      cap: def.winCondition.gemCap,
+      breached: activeEventState.eliteCapBreached,
+    };
+  }
+  if (kind === 'gem_subscore_race') {
+    return {
+      kind, name: def.name,
+      gemName: gemNameForId(activeEventState.eliteGemId),
+      subscore: activeEventState.eliteGemSubscore,
+      threshold: activeEventState.eliteSubscoreThreshold,
+    };
+  }
+  return null;
+}
+
+/**
+ * Called by main.js exactly when the level the Elite fight is
+ * attached to is being cleared. Decides win/lose per the def's
+ * winCondition.kind, applies the matching onWin/onLose effect, and
+ * returns fully-resolved display text.
+ *
+ * @param {number} currentScore - LIVE score (already includes this
+ *   gain) — Gem Cultivator's ±50% is computed off this.
+ * @returns {{ won: boolean, resultText: string, scoreDelta: number } | null}
+ */
+export function resolveEliteOutcome(currentScore) {
   if (activeEventState.type !== EVENT_TYPE.ELITE) return null;
 
   const def = ELITE_POOL.find(d => d.id === activeEventState.eliteDefId);
-  const elapsedMs = Date.now() - activeEventState.eliteStartedAt;
-  const won = elapsedMs <= activeEventState.eliteDurationMs;
+  const wc = def.winCondition;
 
-  let resultText;
-  if (won) {
-    const pool = candidatePoolForRarity(def.winRewardRarity, true);
-    for (let i = 0; i < def.winRewardCount && pool.length > 0; i++) {
-      const rewardDef = pool[Math.floor(Math.random() * pool.length)];
-      const activeBoon = grantBoonBypassingCap(rewardDef.id);
-      activeBoon.appliedEffect = applyBoonEffect(rewardDef);
-    }
-    resultText = def.winText;
+  let won;
+  if (wc.kind === 'time_race') {
+    const elapsedMs = Date.now() - activeEventState.eliteStartedAt;
+    won = elapsedMs <= activeEventState.eliteDurationMs;
+  } else if (wc.kind === 'gem_cap') {
+    won = !activeEventState.eliteCapBreached;
+  } else if (wc.kind === 'gem_subscore_race') {
+    won = activeEventState.eliteGemSubscore >= activeEventState.eliteSubscoreThreshold;
   } else {
-    applyEventPenalty(def.losePenalty);
-    resultText = def.loseText;
+    won = false;
   }
 
+  const effectSpec = won ? def.onWin : def.onLose;
+  const { scoreDelta, grantedNames, removedNames } = applyEliteOutcomeEffect(effectSpec, currentScore);
+  const resultText = won
+    ? resolveMaybeFn(def.winText, grantedNames)
+    : resolveMaybeFn(def.loseText, removedNames);
+
   clearEliteState();
-  return { won, resultText };
+  return { won, resultText, scoreDelta };
 }
 
 // ============================================================
-// CHALLENGE (unchanged this round, aside from seen-tracking)
+// CHALLENGE (UNCHANGED this round)
 // ============================================================
 
 export function pickChallengeDef() {
@@ -460,33 +654,12 @@ export function resolveChallengeOutcome() {
 }
 
 // ============================================================
-// SHARED PENALTIES
+// RESET
 // ============================================================
 
-function applyEventPenalty(penalty) {
-  switch (penalty.kind) {
-    case 'lose_random_boon': {
-      if (boonState.activeBoons.length === 0) return;
-      const victim = boonState.activeBoons[Math.floor(Math.random() * boonState.activeBoons.length)];
-      reverseBoonEffect(victim);
-      removeActiveBoon(victim.pickId);
-      return;
-    }
-    default:
-      return;
-  }
-}
-
-/**
- * Resets every event-related run-scoped bucket for a fresh run.
- * NEW — also clears seenEventIds, so every event can fire again on a
- * new run (they're run-scoped, not permanent).
- *
- * @returns {void}
- */
 export function resetEvents() {
   eventState.chanceIndex = 0;
-  eventState.seenEventIds.length = 0; // NEW
+  eventState.seenEventIds.length = 0;
   clearEliteState();
   clearChallengeState();
 }

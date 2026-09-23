@@ -4,29 +4,43 @@
 // ============================================================
 
 export const eventState = {
-  // Index into EVENT_CHANCE_LADDER (resources/event/event.js) — how
-  // many consecutive "no event" level-ups have happened in a row.
   chanceIndex: 0,
-
-  // NEW — every event def's id (Encounter OR Elite OR Challenge —
-  // one shared list, not tracked per-type) that has ever fired this
-  // run, regardless of outcome (win/lose/accept/decline/flee all
-  // count). Once an id is in here, it can never be offered again for
-  // the rest of this run. Reset on "start over" — this is run-scoped,
-  // NOT permanent meta-progression like gemUnlockState.
-  seenEventIds: [],
+  seenEventIds: [], // shared across all 3 types — see gameplay/event.js's markEventSeen()
 };
 
-// The ONE mid-level modifier currently in effect, if any — an Elite
-// fight or a no-detonation Challenge.
+// The ONE mid-level modifier currently in effect, if any.
 export const activeEventState = {
   type: null, // 'elite' | 'challenge' | null
 
+  // --- Elite fields ---
   eliteDefId: null,
   eliteForLevel: null,
+
+  // time_race win-condition only:
   eliteStartedAt: null,
   eliteDurationMs: null,
 
+  // NEW — gem_cap / gem_subscore_race win-conditions: which gem this
+  // fight is scoped to, rolled fresh at fight-start (Cultist's Ritual/
+  // Gem Cultivator both target "a random unlocked gem type").
+  eliteGemId: null,
+
+  // NEW — gem_cap tracking: running count of that gem cleared this
+  // level (matches + incidental), and whether it's ever exceeded the
+  // cap. Per design, exceeding the cap does NOT end the fight early —
+  // the player still has to clear the level; this flag is just
+  // consulted once the level actually clears.
+  eliteGemClearCount: 0,
+  eliteCapBreached: false,
+
+  // NEW — gem_subscore_race tracking: running score attributed to
+  // that one gem this level, and the threshold it needs to reach
+  // (computed once at fight-start from that level's target and the
+  // score the player had when the fight began).
+  eliteGemSubscore: 0,
+  eliteSubscoreThreshold: 0,
+
+  // --- Challenge fields (unchanged) ---
   challengeDefId: null,
   challengeForLevel: null,
   challengeDetonated: false,

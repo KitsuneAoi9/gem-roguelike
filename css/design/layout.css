@@ -292,7 +292,15 @@ button#reset:hover {
   position: absolute;
   left: 0;
   top: 125%;
-  width: 220px;
+  /* CHANGED — was 220px. #side-stats is 200px wide with 14px/16px
+     padding, so its actual content box is only ~168px. Anything
+     wider than that got hard-clipped by the panel's overflow-y:auto
+     (setting overflow on one axis makes the browser clip the OTHER
+     axis too, even though we never asked it to) — that's exactly
+     the cut-off text in the screenshot. 160px leaves an ~8px safety
+     margin inside that ~168px box so it never spills past the
+     panel's right edge again. */
+  width: 160px;
   background: var(--rock-deep);
   border: 1px solid var(--vein);
   border-radius: 4px;

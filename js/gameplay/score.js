@@ -23,8 +23,8 @@ function getMatchSizeMultiplier(length) {
   return MATCH_BASE_MULTIPLIER[tier] ?? MATCH_BASE_MULTIPLIER[3];
 }
 
-/** Numeric board gemType -> gem id string. */
-function gemIdForType(gemType) {
+/** Numeric board gemType -> gem id string. NEW — exported this round so gameplay/event.js's Elite gem-tracking can reuse it. */
+export function gemIdForType(gemType) {
   return GEM_DEFINITIONS[gemType]?.id;
 }
 
@@ -87,6 +87,79 @@ function frenzyAdjustmentFor(gemId) {
  */
 export function getMatchBonusForGem(gemId) {
   return affinityBonusFor(gemId) + frenzyAdjustmentFor(gemId);
+}
+
+/**
+ * NEW — counts how many cells of a specific gemId were cleared in one
+ * cascade step (matched groups' full length + one per incidental
+ * cell). Used by the Elite gem_cap win-condition (Cultist's Ritual) —
+ * "destroy" there means ANY clear, matched or blast-chained, per
+ * design.
+ *
+ * @param {string} gemId
+ * @param {{gemType:number,length:number}[]} matchedGroups
+ * @param {{gemType:number,row:number,col:number}[]} incidentalCells
+ * @returns {number}
+ */
+export function countGemClears(gemId, matchedGroups, incidentalCells) {
+  let count = 0;
+  for (const group of matchedGroups) {
+    if (gemIdForType(group.gemType) === gemId) count += group.length;
+  }
+  for (const cell of incidentalCells) {
+    if (gemIdForType(cell.gemType) === gemId) count += 1;
+  }
+  return count;
+}
+
+/**
+ * NEW — how much of one cascade step's score is attributable to one
+ * specific gemId, used by the Elite gem_subscore_race win-condition
+ * (Gem Cultivator). Filters matchedGroups/incidentalCells down to
+ * just that gem, then runs the SAME formula calculateCascadeStepScore()
+ * uses (base value x length x size multiplier, + Affinity/Frenzy,
+ * scaled by the step's combo multiplier and global multiplier) — but
+ * deliberately EXCLUDES globalScoreBonus, since that's a flat
+ * once-per-step add-on with no single gem to attribute it to.
+ *
+ * This is a reasonable approximation, not a re-derivation of exactly
+ * what calculateCascadeStepScore() returned for the WHOLE step (a
+ * step with multiple gem types splits its combo/global multiplier
+ * proportionally by construction, so summing every gem's attributed
+ * score back up won't exactly equal the step's real total once the
+ * flat bonus is involved) — acceptable here since this only ever
+ * feeds a progress threshold, not the player's actual score.
+ *
+ * @param {string} gemId
+ * @param {{gemType:number,length:number}[]} matchedGroups
+ * @param {{gemType:number,row:number,col:number}[]} incidentalCells
+ * @param {number} comboCount
+ * @returns {number}
+ */
+export function calculateGemAttributedScore(gemId, matchedGroups, incidentalCells, comboCount) {
+  let rawScore = 0;
+  let affinityTotal = 0;
+  let frenzyTotal = 0;
+
+  for (const group of matchedGroups) {
+    if (gemIdForType(group.gemType) !== gemId) continue;
+    rawScore += getGemBaseValue(gemId) * group.length * getMatchSizeMultiplier(group.length);
+    affinityTotal += affinityBonusFor(gemId);
+    frenzyTotal += frenzyAdjustmentFor(gemId);
+  }
+  for (const cell of incidentalCells) {
+    if (gemIdForType(cell.gemType) !== gemId) continue;
+    rawScore += getGemBaseValue(gemId);
+    affinityTotal += affinityBonusFor(gemId);
+    frenzyTotal += frenzyAdjustmentFor(gemId);
+  }
+
+  if (rawScore === 0 && affinityTotal === 0 && frenzyTotal === 0) return 0;
+
+  const comboScaled = rawScore * getComboMultiplier(comboCount);
+  const afterFlatBonuses = comboScaled + affinityTotal + frenzyTotal;
+  const attributed = afterFlatBonuses * boonEffectState.globalScoreMultiplier;
+  return Math.round(attributed);
 }
 
 /**

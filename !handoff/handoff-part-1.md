@@ -105,7 +105,7 @@ The main grid never contains a special-gem type; that lives in `specialGemState.
 
 ### Rule 11 — Boon effects are data-driven, dispatched by `effect.kind`
 
-Every `BOON_POOL` entry's `effect` object has a `kind` field (`'gem_score_delta'`, `'gem_multiplier_delta'`, `'gem_score_lush'`, `'gem_multiplier_addict'`, `'affinity'`, `'frenzy'`, `'global_score_boost'`). `js/gameplay/boon_effects.js`'s `applyBoonEffect()` is the single place that switches on `effect.kind` and mutates the right state bucket. Do not add ad-hoc per-boon-id branching anywhere else — a new effect *shape* gets a new `kind` and a new `case` in that one switch.
+Every `BOON_POOL` entry's `effect` object has a `kind` field (`'gem_score_delta'`, `'gem_multiplier_delta'`, `'gem_score_opulence'`, `'gem_multiplier_addict'`, `'affinity'`, `'frenzy'`, `'global_score_boost'`). `js/gameplay/boon_effects.js`'s `applyBoonEffect()` is the single place that switches on `effect.kind` and mutates the right state bucket. Do not add ad-hoc per-boon-id branching anywhere else — a new effect *shape* gets a new `kind` and a new `case` in that one switch.
 
 ---
 
@@ -207,11 +207,11 @@ Each `GEM_DEFINITIONS`/`FUTURE_GEM_DEFINITIONS` entry now carries an `id` (lower
 
 ### `base value/gem_base_state.js`
 
-`gemBaseState.perGem[gemId] = { scoreBonus, multiplierBonus }`. Deltas only — the actual value is always `DEFAULT + delta`, computed by `gameplay/gem_base.js`. Seeded for all 11 gem ids (including locked ones) by `resetGemBaseState()` so Lush/Maniac penalties can land on a gem before it's unlocked.
+`gemBaseState.perGem[gemId] = { scoreBonus, multiplierBonus }`. Deltas only — the actual value is always `DEFAULT + delta`, computed by `gameplay/gem_base.js`. Seeded for all 11 gem ids (including locked ones) by `resetGemBaseState()` so Opulence/Maniac penalties can land on a gem before it's unlocked.
 
 ### `boon/boon.js`
 
-`BOON_POOL` is generated, not hand-written: a `GEM_ARCHETYPES` template array (Affinity/Frenzy/Bounty/Brilliance/Lush/Carat/Enthusiast/Addict/Maniac/Fanatic) is cross-joined with `ALL_GEM_CATALOG` (11 gems) to produce 110 entries, plus 4 hand-written global boons (Gemstone Gamble, Trinket Wager, Gem Greed, Jewel Avarice). Also exports `BOON_RARITY_WEIGHTS` (`{ common: 0.60, rare: 0.28, epic: 0.10, legendary: 0.02 }`).
+`BOON_POOL` is generated, not hand-written: a `GEM_ARCHETYPES` template array (Affinity/Frenzy/Bounty/Brilliance/Opulence/Carat/Enthusiast/Addict/Maniac/Fanatic) is cross-joined with `ALL_GEM_CATALOG` (11 gems) to produce 110 entries, plus 4 hand-written global boons (Gemstone Gamble, Trinket Wager, Gem Greed, Jewel Avarice). Also exports `BOON_RARITY_WEIGHTS` (`{ common: 0.60, rare: 0.28, epic: 0.10, legendary: 0.02 }`).
 
 Two ID collisions from the original design-sheet draft were fixed: `bloodstone_affinity`/`pearl_affinity` were reused for what were clearly the Frenzy rows — corrected to `bloodstone_frenzy`/`pearl_frenzy`.
 
@@ -324,14 +324,14 @@ This is the core mechanic reworked this round. Full pipeline, run once per casca
 | Affinity | `boonEffectState.affinityBonus[gem]` | `affinity` | per-match flat bonus, one gem |
 | Frenzy | `boonEffectState.frenzyPicks[]` | `frenzy` | per-match flat bonus/penalty, one gem vs. everyone else |
 | Bounty / Brilliance / Carat | `gemBaseState.perGem[gem].scoreBonus` | `gem_score_delta` | permanent base-value change, one gem |
-| Lush | `gemBaseState.perGem[*].scoreBonus` | `gem_score_lush` | permanent, +to one gem, -to every other gem (including locked ones) |
+| Opulence | `gemBaseState.perGem[*].scoreBonus` | `gem_score_opulence` | permanent, +to one gem, -to every other gem (including locked ones) |
 | Enthusiast / Addict / Fanatic | `gemBaseState.perGem[gem].multiplierBonus` | `gem_multiplier_delta` | permanent base-value change, one gem |
 | Maniac | `gemBaseState.perGem[*].multiplierBonus` | `gem_multiplier_addict` | permanent, +to one gem, -to every other gem |
 | Gemstone Gamble / Trinket Wager / Gem Greed / Jewel Avarice | `boonEffectState.globalScoreMultiplier`/`globalScoreBonus`/`targetScoreMultiplier` | `global_score_boost` | once per cascade step, applies to the WHOLE step's total |
 
 ### Base-value change vs. per-match bonus — why they're not the same
 
-Bounty/Brilliance/Carat/Lush/Enthusiast/Addict/Fanatic/Maniac permanently change the number every future match of that gem is calculated FROM (it's inside the `gemBaseValue x length x sizeMultiplier` multiplication). Affinity/Frenzy are flat amounts added AFTER that calculation, once per match. Worked example (Amethyst Affinity vs. Amethyst Bounty, no other boons):
+Bounty/Brilliance/Carat/Opulence/Enthusiast/Addict/Fanatic/Maniac permanently change the number every future match of that gem is calculated FROM (it's inside the `gemBaseValue x length x sizeMultiplier` multiplication). Affinity/Frenzy are flat amounts added AFTER that calculation, once per match. Worked example (Amethyst Affinity vs. Amethyst Bounty, no other boons):
 
 - No boons: match-3 = 10x3x1.0 = 30. Match-4 = 10x4x1.5 = 60.
 - **Affinity only** (+50 flat): match-3 = 30 + 50 = 80. Match-4 = 60 + 50 = 110.
@@ -365,7 +365,7 @@ Unchanged from the prior handoff — see `ENABLE_MOVES_LIMIT` in `constants.js`,
 | Frenzy | +100 on this gem's match, -5 on every other match | RISKY_BUFF | RARE | Unlimited |
 | Bounty | +25 to this gem's base score | BUFF | COMMON | Unlimited |
 | Brilliance | +50 to this gem's base score | BUFF | RARE | Unlimited |
-| Lush | +150 to this gem's base score, -10 to every other gem's | BUFF | COMMON | Unlimited |
+| Opulence | +150 to this gem's base score, -10 to every other gem's | BUFF | COMMON | Unlimited |
 | Carat | +250 to this gem's base score | BUFF | EPIC | 5 |
 | Enthusiast | +0.5 to this gem's base multiplier | BUFF | COMMON | Unlimited |
 | Addict | +1.0 to this gem's base multiplier | BUFF | RARE | Unlimited |
@@ -502,7 +502,7 @@ Currently Frenzy/Affinity only apply to formed matches, not to incidental blast-
 
 ### Negative score is allowed, on purpose
 
-The scoring pipeline does **not** clamp to zero anywhere. It's expected/acceptable for a heavy Frenzy/Lush/Maniac build to drive the running score negative mid-run — balancing that is the player's problem, not something the engine prevents. Don't add a `Math.max(0, ...)` guard anywhere in `score.js` or `applyScoreGain()`.
+The scoring pipeline does **not** clamp to zero anywhere. It's expected/acceptable for a heavy Frenzy/Opulence/Maniac build to drive the running score negative mid-run — balancing that is the player's problem, not something the engine prevents. Don't add a `Math.max(0, ...)` guard anywhere in `score.js` or `applyScoreGain()`.
 
 ### `resetBoonEffects()` must run before `resetProgression()`
 

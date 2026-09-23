@@ -4,7 +4,7 @@ This is a continuation of `handoff-part-2.md`. Scope: a bundle of bugfixes
 found during playtesting, a new left-side stats panel, a full rework of
 the special-gem system (directional Laser Beams + a Hyperspace Star with
 three swap combos), a relocated score popup, and several rounds of tuning
-on the Lush boon and the target-score formula (ending on a final formula
+on the Opulence boon and the target-score formula (ending on a final formula
 below — earlier formulas tried this session are listed in the changelog
 for context, not left active in code).
 
@@ -150,9 +150,9 @@ legendary .02.
 
 ---
 
-## 8. Lush boon tuned down
+## 8. Opulence boon tuned down
 
-`othersPenalty` on the Lush archetype (`resources/boon/boon.js`) reduced
+`othersPenalty` on the Opulence archetype (`resources/boon/boon.js`) reduced
 from **-10 to -5** (description text updated to match) — -10 played too
 strong. `effect.amount` (+150 to the chosen gem) is unchanged.
 
@@ -230,6 +230,6 @@ above is active.
   `triggerHyperstarDouble()`, `triggerLaserCombo()`.
 - `gems.css` — laser arrow styles, hyperstar star-shape styles.
 - `boon.js` (resources) — `BOON_RARITY.UNCOMMON` added, weights
-  re-split, Lush `othersPenalty`/description changed to -5.
+  re-split, Opulence `othersPenalty`/description changed to -5.
 - `progression.js` (gameplay) — `calculateScoreTarget()` rewritten
   (final version: direct formula, no loop).

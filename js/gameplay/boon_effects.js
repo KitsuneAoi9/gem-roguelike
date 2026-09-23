@@ -57,7 +57,7 @@ export function resetBoonEffects() {
  * gems (Onyx etc.) — a penalty the player can't even see reflected
  * anywhere (the side panel only shows the 7 active gems), and one
  * that gives that gem's eventual unlock a nasty invisible head-start
- * debuff. This does NOT change Lush's or Jeweler/Gemologist's "every
+ * debuff. This does NOT change Opulence's or Jeweler/Gemologist's "every
  * gem in the catalog" sweep elsewhere in this file — those are
  * untouched, per existing precedent — only the RANDOM-pick
  * archetypes are affected, since only they route through this helper.
@@ -117,11 +117,11 @@ export function applyBoonEffect(def) {
         multiplierAmount: effect.multiplierAmount,
       };
 
-    case 'gem_score_lush': {
+    case 'gem_score_opulence': {
       gemBaseState.perGem[effect.gem].scoreBonus += effect.amount;
       // Deterministic (every OTHER gem, no randomness) — still record
       // the exact id list touched, rather than making
-      // reverseBoonEffect() re-derive Lush's "everyone but me" rule
+      // reverseBoonEffect() re-derive Opulence's "everyone but me" rule
       // itself.
       const affectedIds = ALL_GEM_IDS.filter(id => id !== effect.gem);
       affectedIds.forEach(id => { gemBaseState.perGem[id].scoreBonus += effect.othersPenalty; });
@@ -264,9 +264,9 @@ export function reverseBoonEffect(activeBoon) {
       gemBaseState.perGem[applied.gem].multiplierBonus -= applied.multiplierAmount;
       return true;
 
-    // Lush and Brilliance share the same appliedEffect shape
+    // Opulence and Brilliance share the same appliedEffect shape
     // (scoreAmount + penalizedGems + penaltyAmount) — safe to combine.
-    case 'gem_score_lush':
+    case 'gem_score_opulence':
     case 'gem_score_brilliance':
       gemBaseState.perGem[applied.gem].scoreBonus -= applied.scoreAmount;
       applied.penalizedGems.forEach(id => {

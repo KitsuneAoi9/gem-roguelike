@@ -79,12 +79,12 @@ import {
 
 import {
   tryTriggerEvent, buildEncounterOffer, resolveEncounterAccept, resolveEncounterDecline,
-  pickEliteDef, startEliteFight, declineElite, resolveEliteOutcome, getActiveEliteDef,
+  pickEliteDef, startEliteFight, declineElite, resolveEliteOutcome, getEliteProgressInfo,
   pickChallengeDef, startChallenge, declineChallenge, markChallengeDetonation,
   resolveChallengeOutcome, getActiveChallengeDef, resetEvents,
-  // NEW — Fortune's Folly / Lost Miner resolvers
   placeFortunesFollyBet, flipFortunesFollyDoubleOrNothing, payFortunesFollyAndLeave,
   resolveLostMinerHelp, resolveLostMinerAbsorb,
+  recordEliteGemActivity, // NEW
 } from './event.js';
 import { EVENT_TYPE } from '../resources/event/event.js';
 import { activeEventState } from '../resources/event/event_state.js';
@@ -257,13 +257,13 @@ function applyMovesLimitVisibility() {
  * two global boon totals.
  *
  * The ONLY things that can change any of these numbers are boon
- * picks (Affinity/Bounty/Brilliance/Lush/Frenzy/Enthusiast/Addict/
+ * picks (Affinity/Bounty/Brilliance/Opulence/Frenzy/Enthusiast/Addict/
  * Maniac/Fanatic, and the 4 global boons) — so this only needs to run
  * once in init() and again right after applyBoonEffect(), not on
  * every score change.
  *
  * Only the 7 ACTIVE gems are shown (GEM_DEFINITIONS) — the 4
- * locked/future gems (Onyx etc.) can still quietly accumulate Lush/
+ * locked/future gems (Onyx etc.) can still quietly accumulate Opulence/
  * Maniac penalties in gemBaseState, but showing that here would just
  * be confusing before they're actually unlockable.
  *
@@ -667,11 +667,21 @@ function formatCountdown(msRemaining) {
  */
 function updateObjectiveBanner() {
   if (activeEventState.type === EVENT_TYPE.ELITE) {
-    const def = getActiveEliteDef();
-    if (!def) { objectiveBannerEl.classList.add('hidden'); return; }
-    const elapsed = Date.now() - activeEventState.eliteStartedAt;
-    const remaining = activeEventState.eliteDurationMs - elapsed;
-    objectiveTextEl.textContent = `⚔ ${def.name} — reach ${progressionState.scoreTarget} before ${formatCountdown(remaining)}`;
+    const info = getEliteProgressInfo();
+    if (!info) { objectiveBannerEl.classList.add('hidden'); return; }
+
+    if (info.kind === 'time_race') {
+      const elapsed = Date.now() - activeEventState.eliteStartedAt;
+      const remaining = activeEventState.eliteDurationMs - elapsed;
+      objectiveTextEl.textContent = `⚔ ${info.name} — reach ${progressionState.scoreTarget} before ${formatCountdown(remaining)}`;
+    } else if (info.kind === 'gem_cap') {
+      objectiveTextEl.textContent = info.breached
+        ? `⚔ ${info.name} — cap exceeded (${info.count}/${info.cap} ${info.gemName})! Clear the level to receive the penalty.`
+        : `⚔ ${info.name} — clear without matching/destroying more than ${info.cap} ${info.gemName} (${info.count}/${info.cap})`;
+    } else if (info.kind === 'gem_subscore_race') {
+      const shown = Math.min(info.subscore, info.threshold);
+      objectiveTextEl.textContent = `⚔ ${info.name} — earn ${info.threshold} score from ${info.gemName} before clearing (${shown}/${info.threshold})`;
+    }
     objectiveBannerEl.classList.remove('hidden');
   } else if (activeEventState.type === EVENT_TYPE.CHALLENGE) {
     const def = getActiveChallengeDef();
@@ -936,62 +946,36 @@ function showEliteDialog(def, onContinue) {
   const fightBtn = document.createElement('button');
   fightBtn.textContent = def.fightLabel;
   fightBtn.addEventListener('click', () => {
-    // Double THIS level's target and start the fight's timer/state
-    // together, right now — the doubled target needs to be in place
-    // the instant the next level actually begins.
-    progressionState.scoreTarget = Math.round(progressionState.scoreTarget * def.targetMultiplier);
+    // startEliteFight() now owns EVERYTHING about setting the fight
+    // up (target doubling for a time_race, rolling a gem + threshold
+    // for the other two kinds) — main.js just refreshes the DOM.
+    startEliteFight(def, score);
     targetEl.textContent = progressionState.scoreTarget;
-    startEliteFight(def);
-    addHistoryEntry('event', `Elite — ${def.name}: you accept the fight!`, 'event');
+    addHistoryEntry('event', `Elite — ${def.name}: you accept the challenge!`, 'event');
     renderHistoryPanel();
     updateObjectiveBanner();
     eventDialogEl.classList.add('hidden');
-    onContinue(); // the fight IS the next level — start it immediately, no "Continue" wait
-  });
-
-  const fleeBtn = document.createElement('button');
-  fleeBtn.textContent = def.fleeLabel;
-  fleeBtn.addEventListener('click', () => {
-    declineElite(def);
-    renderSideStats(); // in case a future Elite's declinePenalty ever touches stats
-    addHistoryEntry('event', `Elite — ${def.name}: ${def.fleeText}`, 'event');
-    renderHistoryPanel();
-    showEventResult(def.fleeText, onContinue);
-  });
-
-  eventChoicesEl.appendChild(fightBtn);
-  eventChoicesEl.appendChild(fleeBtn);
-  eventDialogEl.classList.remove('hidden');
-}
-
-/** Builds and shows the Challenge dialog (accept-or-decline). */
-function showChallengeDialog(def, onContinue) {
-  eventTitleEl.textContent = def.name;
-  eventStoryEl.textContent = def.storyText;
-  eventChoicesEl.innerHTML = '';
-
-  const acceptBtn = document.createElement('button');
-  acceptBtn.textContent = def.acceptLabel;
-  acceptBtn.addEventListener('click', () => {
-    startChallenge(def);
-    addHistoryEntry('event', `Challenge — ${def.name}: you accept!`, 'event');
-    renderHistoryPanel();
-    updateObjectiveBanner();
-    eventDialogEl.classList.add('hidden');
-    onContinue(); // the challenge IS the next level — start it immediately
+    onContinue();
   });
 
   const declineBtn = document.createElement('button');
   declineBtn.textContent = def.declineLabel;
   declineBtn.addEventListener('click', () => {
-    declineChallenge();
-    addHistoryEntry('event', `Challenge — ${def.name}: you decline.`, 'event');
+    // declineElite() fully resolves its own text (including the
+    // coinflip branch) and hands back a ready scoreDelta/resultText.
+    const result = declineElite(def, score);
+    if (result.scoreDelta) {
+      score += result.scoreDelta;
+      scoreEl.textContent = score;
+    }
+    renderSideStats();
+    const tone = result.scoreDelta < 0 ? 'negative' : 'event';
+    addHistoryEntry('event', `Elite — ${def.name}: ${result.resultText}`, tone);
     renderHistoryPanel();
-    eventDialogEl.classList.add('hidden');
-    onContinue();
+    showEventResult(result.resultText, onContinue);
   });
 
-  eventChoicesEl.appendChild(acceptBtn);
+  eventChoicesEl.appendChild(fightBtn);
   eventChoicesEl.appendChild(declineBtn);
   eventDialogEl.classList.remove('hidden');
 }
@@ -1063,27 +1047,22 @@ function applyScoreGain(gained, popupText) {
   score += gained;
   scoreEl.textContent = score;
 
-  // Snapshot BEFORE the while loop below, so a single huge gain that
-  // happens to cross more than one level's target at once can still
-  // report the whole span in its history line, not just "the last one."
   const levelBeforeGain = progressionState.level;
 
   let leveledUp = false;
-  // NEW — captured here so the elite/challenge result lines can be
-  // logged AFTER the normal level-cleared line, in reading order.
   let eliteOutcome = null;
   let challengeOutcome = null;
 
   while (score >= progressionState.scoreTarget) {
-    // NEW — resolve any Elite/Challenge attached to the level being
-    // cleared RIGHT NOW, before advanceLevel() moves
-    // progressionState.level forward. Both resolve functions no-op
-    // (return null) if nothing of that type is active for THIS level,
-    // so it's safe to call both unconditionally every iteration —
-    // this also correctly handles the rare case of a single huge gain
-    // crossing more than one level at once.
     if (activeEventState.type === EVENT_TYPE.ELITE && activeEventState.eliteForLevel === progressionState.level) {
-      eliteOutcome = resolveEliteOutcome();
+      // resolveEliteOutcome() takes the LIVE score (already includes
+      // this gain) — Gem Cultivator's ±50% is computed at this exact
+      // moment, per design.
+      eliteOutcome = resolveEliteOutcome(score);
+      if (eliteOutcome && eliteOutcome.scoreDelta) {
+        score += eliteOutcome.scoreDelta;
+        scoreEl.textContent = score; // refresh immediately — a ±50% swing is substantial
+      }
     }
     if (activeEventState.type === EVENT_TYPE.CHALLENGE && activeEventState.challengeForLevel === progressionState.level) {
       challengeOutcome = resolveChallengeOutcome();
@@ -1098,10 +1077,11 @@ function applyScoreGain(gained, popupText) {
     leveledUp = true;
   }
 
-  // NEW — log the Elite/Challenge outcome (if any) right after the
-  // score-gaiinit(line, before the level-cleared line below.
+  const tone = gained > 0 ? 'positive' : gained < 0 ? 'negative' : 'neutral';
+  addHistoryEntry('score', popupText, tone);
+
   if (eliteOutcome) {
-    renderSideStats(); // the win/lose reward or penalty touched gemBaseState
+    renderSideStats();
     addHistoryEntry('event', `Elite result: ${eliteOutcome.resultText}`, eliteOutcome.won ? 'positive' : 'negative');
   }
   if (challengeOutcome && challengeOutcome.resultText) {
@@ -1109,35 +1089,19 @@ function applyScoreGain(gained, popupText) {
     addHistoryEntry('event', `Challenge result: ${challengeOutcome.resultText}`, 'positive');
   }
   if (eliteOutcome || challengeOutcome) {
-    updateObjectiveBanner(); // clears the banner now that the modifier is resolved
+    updateObjectiveBanner();
   }
-
-  // NEW — log this gain into the History panel. Tone is derived
-  // straight from the sign of `gained`: a Frenzy/Lust-type penalty
-  // can legitimately make a cascade step's total negative, and that
-  // should read as a red line just like an invalid outcome would.
-  const tone = gained > 0 ? 'positive' : gained < 0 ? 'negative' : 'neutral';
-  addHistoryEntry('score', popupText, tone);
 
   if (leveledUp) {
     levelEl.textContent = progressionState.level;
     targetEl.textContent = progressionState.scoreTarget;
     movesEl.textContent = moves;
-    // The level-up dialog is about to cover the screen — blank the
-    // status line so it doesn't show a stale prompt underneath it.
     messageEl.textContent = '';
-
-    // NEW — a level-up gets its OWN follow-up history line, separate
-    // from the score-gain line just above. Handles clearing more than
-    // one level in a single gain (a big enough cascade/global-boost
-    // total COULD cross more than one target at once).
     const clearedLabel = progressionState.level - levelBeforeGain > 1
       ? `Level ${levelBeforeGain}-${progressionState.level - 1}`
       : `Level ${levelBeforeGain}`;
     addHistoryEntry('score', `${clearedLabel} cleared! Moving to Level ${progressionState.level}.`, 'levelup');
   } else {
-    // NEW — score deltas float above the board instead of appearing
-    // in the #message line.
     showScorePopup(popupText);
   }
   renderHistoryPanel();
@@ -1338,11 +1302,12 @@ function advanceTilePlacement() {
  * @param {string} popupText
  * @returns {void}
  */
-function finishSwapActivatedCombo(clearedCells, gained, popupText) {
+function finishSwapActivatedCombo(clearedCells, gained, popupText, matchedGroups = [], incidentalCells = []) {
   // NEW — every one of the 7 swap-activated combos IS, by definition,
   // a "detonation" for the no-detonation Challenge. Marking it once
   // here (rather than in all 7 handler functions) covers every case.
   markChallengeDetonation();
+  recordEliteGemActivity(matchedGroups, incidentalCells, 1); // every combo is a single "step" — comboCount 1
   updateObjectiveBanner();
 
   if (ENABLE_MOVES_LIMIT) {
@@ -1380,26 +1345,14 @@ function finishSwapActivatedCombo(clearedCells, gained, popupText) {
  */
 function handleHyperstarSingle(hyperRow, hyperCol, targetGemType) {
   const clearedCells = triggerHyperstarSingle(grid, hyperRow, hyperCol, targetGemType);
-
-  // Read the Hyperstar's OWN underlying color BEFORE anything gets
-  // nulled out later — it's whatever gem type it was born from, not
-  // necessarily (and generally not) targetGemType.
   const hyperstarOwnGemType = grid[hyperRow][hyperCol];
-
-  // Strip the Hyperstar's own cell out of the wipe count so the
-  // matched-group length reflects ONLY cells that are genuinely that
-  // color — otherwise every wipe over-counted by exactly 1 cell of
-  // the wrong color.
   const wipedCells = clearedCells.filter(([r, c]) => !(r === hyperRow && c === hyperCol));
 
-  const gained = calculateCascadeStepScore({
-    matchedGroups: [{ gemType: targetGemType, length: wipedCells.length }],
-    // The Hyperstar's own cell scores as one flat incidental hit for
-    // ITS OWN gem — it was never actually part of the wiped color.
-    incidentalCells: [{ gemType: hyperstarOwnGemType, row: hyperRow, col: hyperCol }],
-    comboCount: 1,
-  });
-  finishSwapActivatedCombo(clearedCells, gained, `Hyperstar Wipe: ${signed(gained)}`);
+  const matchedGroups = [{ gemType: targetGemType, length: wipedCells.length }];
+  const incidentalCells = [{ gemType: hyperstarOwnGemType, row: hyperRow, col: hyperCol }];
+
+  const gained = calculateCascadeStepScore({ matchedGroups, incidentalCells, comboCount: 1 });
+  finishSwapActivatedCombo(clearedCells, gained, `Hyperstar Wipe: ${signed(gained)}`, matchedGroups, incidentalCells);
 }
 
 /**
@@ -1413,12 +1366,9 @@ function handleHyperstarSingle(hyperRow, hyperCol, targetGemType) {
  */
 function handleHyperstarLaserCombo(hyperRow, hyperCol, laserColorType) {
   const clearedCells = triggerHyperstarLaserCombo(grid, hyperRow, hyperCol, laserColorType);
-  const gained = calculateCascadeStepScore({
-    matchedGroups: [],
-    incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
-    comboCount: 1,
-  });
-  finishSwapActivatedCombo(clearedCells, gained, `Hyperstar Laser Combo: ${signed(gained)}`);
+  const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
+  const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
+  finishSwapActivatedCombo(clearedCells, gained, `Hyperstar Laser Combo: ${signed(gained)}`, [], incidentalCells);
 }
 
 /**
@@ -1433,12 +1383,9 @@ function handleHyperstarLaserCombo(hyperRow, hyperCol, laserColorType) {
  */
 function handleHyperstarDischargerCombo(hyperRow, hyperCol, dischargerColorType) {
   const clearedCells = triggerHyperstarDischargerCombo(grid, hyperRow, hyperCol, dischargerColorType);
-  const gained = calculateCascadeStepScore({
-    matchedGroups: [],
-    incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
-    comboCount: 1,
-  });
-  finishSwapActivatedCombo(clearedCells, gained, `Hyperstar Discharger Combo: ${signed(gained)}`);
+  const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
+  const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
+  finishSwapActivatedCombo(clearedCells, gained, `Hyperstar Discharger Combo: ${signed(gained)}`, [], incidentalCells);
 }
 
 /**
@@ -1449,12 +1396,9 @@ function handleHyperstarDischargerCombo(hyperRow, hyperCol, dischargerColorType)
  */
 function handleHyperstarDouble() {
   const clearedCells = triggerHyperstarDouble(grid);
-  const gained = calculateCascadeStepScore({
-    matchedGroups: [],
-    incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
-    comboCount: 1,
-  });
-  finishSwapActivatedCombo(clearedCells, gained, `Double Hyperstar: ${signed(gained)}`);
+  const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
+  const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
+  finishSwapActivatedCombo(clearedCells, gained, `Double Hyperstar: ${signed(gained)}`, [], incidentalCells);
 }
 
 /**
@@ -1467,12 +1411,9 @@ function handleHyperstarDouble() {
  */
 function handleLaserCombo(originRow, originCol) {
   const clearedCells = triggerLaserCombo(grid, originRow, originCol);
-  const gained = calculateCascadeStepScore({
-    matchedGroups: [],
-    incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
-    comboCount: 1,
-  });
-  finishSwapActivatedCombo(clearedCells, gained, `Laser Combo: ${signed(gained)}`);
+  const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
+  const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
+  finishSwapActivatedCombo(clearedCells, gained, `Laser Combo: ${signed(gained)}`, [], incidentalCells);
 }
 
 /**
@@ -1487,12 +1428,9 @@ function handleLaserCombo(originRow, originCol) {
  */
 function handleDischargerLaserCombo(dischargerRow, dischargerCol, laserOrientation) {
   const clearedCells = triggerDischargerLaserCombo(grid, dischargerRow, dischargerCol, laserOrientation);
-  const gained = calculateCascadeStepScore({
-    matchedGroups: [],
-    incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
-    comboCount: 1,
-  });
-  finishSwapActivatedCombo(clearedCells, gained, `Discharger Laser Combo: ${signed(gained)}`);
+  const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
+  const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
+  finishSwapActivatedCombo(clearedCells, gained, `Discharger Laser Combo: ${signed(gained)}`, [], incidentalCells);
 }
 
 /**
@@ -1506,12 +1444,9 @@ function handleDischargerLaserCombo(dischargerRow, dischargerCol, laserOrientati
  */
 function handleDischargerDouble(originRow, originCol) {
   const clearedCells = triggerDischargerDouble(grid, originRow, originCol);
-  const gained = calculateCascadeStepScore({
-    matchedGroups: [],
-    incidentalCells: clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
-    comboCount: 1,
-  });
-  finishSwapActivatedCombo(clearedCells, gained, `Double Discharger: ${signed(gained)}`);
+  const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
+  const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
+  finishSwapActivatedCombo(clearedCells, gained, `Double Discharger: ${signed(gained)}`, [], incidentalCells);
 }
 
 /**
@@ -1696,10 +1631,13 @@ function resolveMatches(swapCells = null) {
     checkEndState();
     return;
   }
-
   comboCount++;
 
   const { clearedCells, spawns, matchedGroups, incidentalCells } = resolveSpecialGems(grid, matched, swapCells);
+  // NEW — Elite gem-tracking runs on EVERY cascade step, not just
+  // detonating ones.
+  recordEliteGemActivity(matchedGroups, incidentalCells, comboCount);
+  updateObjectiveBanner();
   // NEW — a non-empty incidentalCells list means a Laser/Discharger's
   // PASSIVE blast fired as part of this match/chain-reaction — that's
   // a detonation too, distinct from the swap-activated combos above.

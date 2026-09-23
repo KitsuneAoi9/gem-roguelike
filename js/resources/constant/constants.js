@@ -91,7 +91,7 @@ export const FUTURE_GEM_DEFINITIONS = [
 
 // Full 11-gem roster (7 active + 4 future/locked) — used to build the
 // per-gem boon pool and to seed per-gem base-value state so locked
-// gems can still accumulate Lush/Maniac deltas before they're unlocked.
+// gems can still accumulate Opulence/Maniac deltas before they're unlocked.
 export const ALL_GEM_CATALOG = [...GEM_DEFINITIONS, ...FUTURE_GEM_DEFINITIONS];
 export const ALL_GEM_IDS = ALL_GEM_CATALOG.map(g => g.id);
 

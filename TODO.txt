@@ -57,7 +57,7 @@ Brilliance	Increase the base score value of [gem]	    RISKY_BUFF	RARE	    3
             and [another random gem] base score value
             of by -10.
 
-Lush	    Increase the base score value of [gem]      RISKY_BUFF	EPIC	    2
+Opulence	    Increase the base score value of [gem]      RISKY_BUFF	EPIC	    2
             by +250, but decrease the base score value
             of non-[gem] gems by -10.
 
@@ -84,3 +84,11 @@ B. Non-series type
 Name        Description	                                        Type	    Rarity	    Max Occurrences
 Jeweler	    Increase all gem base score value by +25.	        BUFF	    EPIC	    2
 Gemologist	Increase all gem base multiplier value by +1.5	    BUFF	    LEGENDARY	2
+
+
+2026/09/23
+1. Star gem can destroy another star gem if they both come from the same gem
+2. Getting special gems
+OO
+OO
+OO

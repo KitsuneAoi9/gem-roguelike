@@ -348,6 +348,16 @@ export function resolveSpecialGems(grid, matched, swapCells = null) {
  * dedicated combo (triggerHyperstarDischargerCombo() below), same as
  * Laser already did.
  *
+ * FIXED THIS ROUND — a SECOND Hyperstar sitting on a
+ * targetGemType-colored cell used to get swept up and destroyed as
+ * "just another same-color gem," since this only ever scanned the
+ * plain grid[][] color, never specialGemState. Hyperstar is
+ * documented (see file header, Part 4 §24) as swap-activated ONLY —
+ * nothing should be able to incidentally destroy one except a real
+ * swap targeting it directly (Hyperstar+Hyperstar -> triggerHyperstarDouble()).
+ * A same-color wipe fired by a DIFFERENT Hyperstar is exactly the
+ * "incidental" destruction that rule exists to prevent.
+ *
  * @param {number[][]} grid
  * @param {number} hyperRow - row the Hyperstar ended up at after the swap.
  * @param {number} hyperCol - column the Hyperstar ended up at after the swap.
@@ -356,11 +366,26 @@ export function resolveSpecialGems(grid, matched, swapCells = null) {
  */
 export function triggerHyperstarSingle(grid, hyperRow, hyperCol, targetGemType) {
   const cleared = [[hyperRow, hyperCol]];
+
   for (let r = 0; r < SIZE; r++) {
     for (let c = 0; c < SIZE; c++) {
+      // Skip the origin Hyperstar's own cell here — it's already
+      // pushed above unconditionally, and its underlying grid[][]
+      // color could coincidentally equal targetGemType too (e.g.
+      // wiping Ruby while the Hyperstar itself happens to sit on a
+      // Ruby-colored cell). Don't double-add it.
+      if (r === hyperRow && c === hyperCol) continue;
+
+      // NEW — the actual bugfix. If ANOTHER Hyperstar is sitting
+      // here, it doesn't matter what color the grid says this cell
+      // is: leave it alone entirely. It's not cleared, not scored,
+      // not touched in any way by this wipe.
+      if (specialGemState.grid[r][c] === SPECIAL_GEM_TYPE.HYPERSTAR) continue;
+
       if (grid[r][c] === targetGemType) cleared.push([r, c]);
     }
   }
+
   return cleared;
 }
 
@@ -375,6 +400,11 @@ export function triggerHyperstarSingle(grid, hyperRow, hyperCol, targetGemType) 
  * a documented exception to this module's usual "read grid, don't
  * write it" split (see file header comment).
  *
+ * FIXED THIS ROUND — same bug/fix as triggerHyperstarSingle() above:
+ * this used to convert (and therefore destroy) a second Hyperstar
+ * sharing the target color, since the color scan below never checked
+ * specialGemState before overwriting it.
+ *
  * @param {number[][]} grid
  * @param {number} hyperRow - row the Hyperstar ended up at after the swap.
  * @param {number} hyperCol - column the Hyperstar ended up at after the swap.
@@ -388,6 +418,12 @@ export function triggerHyperstarLaserCombo(grid, hyperRow, hyperCol, targetGemTy
   for (let r = 0; r < SIZE; r++) {
     for (let c = 0; c < SIZE; c++) {
       if (grid[r][c] !== targetGemType) continue;
+
+      // NEW — never convert (and thereby destroy) a second Hyperstar
+      // just because it happens to sit on a matching-colored cell.
+      // Skip it and move on; it stays exactly as it was.
+      if (specialGemState.grid[r][c] === SPECIAL_GEM_TYPE.HYPERSTAR) continue;
+
       const orientation = Math.random() < 0.5 ? SPECIAL_GEM_TYPE.LASER_ROW : SPECIAL_GEM_TYPE.LASER_COL;
       specialGemState.grid[r][c] = orientation;
       convertedLasers.push({ row: r, col: c, orientation });
@@ -408,14 +444,15 @@ export function triggerHyperstarLaserCombo(grid, hyperRow, hyperCol, targetGemTy
 }
 
 /**
- * NEW — Hyperstar + Discharger swap: "convert and detonate," the
- * exact same pattern as triggerHyperstarLaserCombo() above, just
- * converting to Dischargers (instead of Lasers) and detonating each
- * with a 3x3 blast (dischargerBlastCells()) instead of a row/column
- * one.
+ * Hyperstar + Discharger swap: "convert and detonate," the exact same
+ * pattern as triggerHyperstarLaserCombo() above, just converting to
+ * Dischargers (instead of Lasers) and detonating each with a diamond
+ * blast (dischargerBlastCells()) instead of a row/column one.
  *
  * Mutates specialGemState.grid directly during the conversion step —
  * same documented exception as the Laser version.
+ *
+ * FIXED THIS ROUND — same bug/fix as the two functions above.
  *
  * @param {number[][]} grid
  * @param {number} hyperRow - row the Hyperstar ended up at after the swap.
@@ -427,21 +464,21 @@ export function triggerHyperstarDischargerCombo(grid, hyperRow, hyperCol, target
   const cleared = new Set([`${hyperRow},${hyperCol}`]);
 
   // Step 1 — convert every matching-color cell into a Discharger.
-  // Collected first (not detonated inline) so step 2 always detonates
-  // the FULL converted set, not a partial one affected by earlier
-  // detonations altering the board mid-loop — same reasoning as the
-  // Laser version above.
   const convertedDischargers = [];
   for (let r = 0; r < SIZE; r++) {
     for (let c = 0; c < SIZE; c++) {
       if (grid[r][c] !== targetGemType) continue;
+
+      // NEW — same Hyperstar-protection fix as the Laser combo above.
+      if (specialGemState.grid[r][c] === SPECIAL_GEM_TYPE.HYPERSTAR) continue;
+
       specialGemState.grid[r][c] = SPECIAL_GEM_TYPE.DISCHARGER;
       convertedDischargers.push({ row: r, col: c });
     }
   }
 
   // Step 2 — detonate every Discharger just created: each clears its
-  // own 3x3 area, exactly like a normally-matched Discharger would.
+  // own diamond area, exactly like a normally-matched Discharger would.
   convertedDischargers.forEach(({ row, col }) => {
     cleared.add(`${row},${col}`);
     dischargerBlastCells(row, col).forEach(([br, bc]) => {

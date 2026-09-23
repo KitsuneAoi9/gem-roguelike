@@ -111,22 +111,22 @@ const GEM_ARCHETYPES = [
     type: BOON_TYPE.RISKY_BUFF,
     rarity: BOON_RARITY.RARE,
     maxOccurrences: 3,
-    // NEW kind — distinct from Lush's 'gem_score_lush' below, since
+    // NEW kind — distinct from Opulence's 'gem_score_opulence' below, since
     // Brilliance only ever touches TWO random other gems, not every
     // other gem in the catalog.
     effect: { kind: 'gem_score_brilliance', amount: 50, othersPenalty: -10, penalizedCount: 2 },
   },
   {
-    idSuffix: 'lush',
-    nameSuffix: 'Lush',
+    idSuffix: 'opulence',
+    nameSuffix: 'Opulence',
     description: (Gem) => `Increase the base score value of ${Gem} by +250, but decrease the base score value of non-${Gem} gems by -10.`,
     type: BOON_TYPE.RISKY_BUFF,
     rarity: BOON_RARITY.EPIC,
     maxOccurrences: 2,
-    // Unchanged kind — Lush is still the "penalize EVERY other gem"
+    // Unchanged kind — Opulence is still the "penalize EVERY other gem"
     // archetype, explicitly called out as "non-[gem] gems" (not
     // "two random gems") on the new sheet.
-    effect: { kind: 'gem_score_lush', amount: 250, othersPenalty: -10 },
+    effect: { kind: 'gem_score_opulence', amount: 250, othersPenalty: -10 },
   },
   {
     idSuffix: 'grandeur',
@@ -244,7 +244,7 @@ const globalBoons = [
 // never gated by gemUnlockState (see boon.js gameplay's
 // isBoonAvailable()); their own dispatcher case in boon_effects.js
 // applies the delta to every id in ALL_GEM_IDS directly, locked gems
-// included, same precedent Lush already set for "hits every gem"
+// included, same precedent Opulence already set for "hits every gem"
 // effects.
 const nonSeriesBoons = [
   {

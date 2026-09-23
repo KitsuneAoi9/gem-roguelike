@@ -1,19 +1,30 @@
 // ============================================================
 // EVENT.JS (resources) — the fixed event catalog.
 //
-// NEW THIS ROUND — ENCOUNTER_POOL entries now carry a `kind` field
-// ('trade' | 'gamble' | 'help_or_absorb') since the three Encounters
-// no longer share one shape: Gem Mole is a simple binary trade,
-// Fortune's Folly is a looping bet-or-cash-out gamble, and Lost Miner
-// is a three-way choice with a boon-AND-curse outcome. gameplay/
-// event.js and main.js both dispatch on this field to pick the right
-// logic/dialog for a given encounter, same spirit as boon_effects.js
-// dispatching on effect.kind.
+// REWORKED THIS ROUND — ELITE_POOL entries no longer share one shape.
+// Gem Elitist (single time-race mechanic) is retired in favor of
+// three structurally different fights, each declaring its own
+// `winCondition` (a tagged union, same spirit as boon effect.kind):
+//   - 'time_race'         — Boon Hoarder: beat the (doubled) target
+//                            within a time limit.
+//   - 'gem_cap'            — Cultist's Ritual: clear the level without
+//                            matching/destroying more than N of one
+//                            random gem type.
+//   - 'gem_subscore_race'  — Gem Cultivator: earn a threshold amount
+//                            of score specifically from one random gem
+//                            type before the level clears.
+// `onWin`/`onLose` are a second tagged union describing the OUTCOME
+// effect (grant boons / lose boons / permanent target-% shift / one-
+// time score-% swing) — gameplay/event.js's applyEliteOutcomeEffect()
+// is the single dispatcher for these, mirroring boon_effects.js's
+// applyBoonEffect() pattern. `decline` is a THIRD tagged union
+// ('free' | 'fixed_penalty' | 'coinflip_penalty') describing what,
+// if anything, happens when the player walks away instead of fighting.
 //
-// Every multi-paragraph flavor-text block below uses "\n\n" between
-// paragraphs — css/design/dialog.css's .event-story now has
-// white-space: pre-line so those breaks actually render as visual
-// paragraph gaps instead of collapsing into one run-on line.
+// Text fields that need to reflect what actually happened (which
+// boons were granted/lost) are FUNCTIONS taking those names as
+// arguments; plain fights use plain strings. gameplay/event.js
+// resolves either shape via its resolveMaybeFn() helper.
 // ============================================================
 
 import { BOON_RARITY } from '../boon/boon.js';
@@ -32,28 +43,19 @@ export const EVENT_TYPE_WEIGHTS = {
 
 export const EVENT_CHANCE_LADDER = [0.05, 0.10, 0.20, 0.35, 0.55, 0.75];
 
-// --- Encounter pool ---
+// --- Encounter pool (UNCHANGED from prior round) ---
 export const ENCOUNTER_POOL = [
   {
     id: 'gem_mole',
-    kind: 'trade', // NEW field — see file header
+    kind: 'trade',
     name: 'The Gem Mole',
-    storyText: "A small mole pokes its head out of a fresh tunnel, clutching a glimmering trinket between its paws. It chitters excitedly and gestures between your boons and its own. It wants to make a trade — but the mole has no interest in letting you choose. One of your boons will be taken at random, and in exchange, you'll receive another boon of the same rarity.",
-    acceptLabel: 'Let the mole choose',
+    storyText: "A small mole pokes its head out of a fresh tunnel, clutching a glimmering trinket between its paws. It chitters and gestures back and forth between your boons and its own — it wants to make a trade.",
+    acceptLabel: 'Trade a boon',
     declineLabel: 'Decline',
     resultAcceptText: (givenName, receivedName) =>
       `You trade ${givenName} for ${receivedName}. The mole chitters happily and scurries back into its tunnel.`,
     resultDeclineText: "You decline its offer. The mole's eyes narrow. It remembers your face.",
   },
-
-  // NEW — Fortune's Folly: a looping double-or-nothing gamble.
-  // `betOptions` drives the INITIAL node's bet buttons (main.js's
-  // showFortunesFollyDialog()); `payAndLeave` is the 6th initial
-  // choice (skip the gamble entirely). Every *Text field that takes a
-  // `pot` argument is filled in with the LIVE pot amount at display
-  // time — this file only ever holds the text TEMPLATE, never the
-  // number itself (Rule 6/7: numbers belong to gameplay-computed
-  // state, not baked into resource strings).
   {
     id: 'fortunes_folly',
     kind: 'gamble',
@@ -97,13 +99,6 @@ export const ENCOUNTER_POOL = [
     callItADayText: (pot) =>
       `You push your chair back and rise from the table. The stranger chuckles as they settle your winnings — ${pot} — into your hands.\n\n\u201cLeaving already? A shame. But a prudent gambler lives to bet another day.\u201d`,
   },
-
-  // NEW — Lost Miner: a three-way choice (help / absorb / leave).
-  // `helpResultText`/`absorbResultText` are functions since their
-  // final line needs the actual amount/boon-name/curse-name resolved
-  // at click time (gameplay/event.js's resolveLostMinerHelp()/
-  // resolveLostMinerAbsorb()) — same convention as Fortune's Folly's
-  // pot-dependent text above.
   {
     id: 'lost_miner',
     kind: 'help_or_absorb',
@@ -123,27 +118,110 @@ export const ENCOUNTER_POOL = [
   },
 ];
 
-// --- Elite pool (unchanged this round) ---
+// --- Elite pool — REWRITTEN THIS ROUND (see file header) ---
 export const ELITE_POOL = [
   {
-    id: 'gem_elitist',
-    name: 'Gem Elitist',
-    storyText: "A towering, crystalline figure blocks your path, arms folded. \"Prove your worth,\" it booms, \"— double the score, a third of the time. Succeed, and I'll share my hoard. Fail, and I'll take a keepsake instead.\"",
-    fightLabel: 'Fight',
-    fleeLabel: 'Flee',
-    fleeText: 'You slip past without a fight. The Gem Elitist lets you go, unbothered.',
-    winText: 'You break through! The Gem Elitist grudgingly hands over two Epic boons.',
-    loseText: 'Time runs out before you can finish. The Gem Elitist snatches a boon from you as its price.',
-    targetMultiplier: 2,
-    timeLimitMs: 3 * 60 * 1000,
-    winRewardRarity: BOON_RARITY.EPIC,
-    winRewardCount: 2,
-    losePenalty: { kind: 'lose_random_boon' },
-    declinePenalty: null,
+    id: 'boon_hoarder',
+    name: 'Boon Hoarder',
+    storyText:
+      "A grotesque figure emerges from a cavern filled with piles of gemstones and ancient treasures. Its body is covered in countless boons, bound together like trophies.\n\n" +
+      "Its eyes immediately fall upon your collection.\n\n" +
+      "\u201cMore...\u201d it whispers. \u201cNeed. more.\u201d\n\n" +
+      "It reaches toward your Boons with trembling hands.\n\n" +
+      "\u201cGive them to me. Or I will take them myself.\u201d",
+    fightLabel: 'Defend your boons',
+    declineLabel: 'Surrender your boons',
+
+    winCondition: { kind: 'time_race', targetMultiplier: 2, timeLimitMs: 3 * 60 * 1000 },
+
+    // Grants 3 Epic boons, exempt from maxOccurrences — same
+    // treatment the old Gem Elitist's win reward used.
+    onWin: { kind: 'grant_boons', rarity: BOON_RARITY.EPIC, count: 3, bypassCap: true },
+    // Loses 2 random held boons — reversed via the shared
+    // appliedEffect/reverseBoonEffect plumbing, same as everywhere
+    // else a boon is taken away.
+    onLose: { kind: 'lose_random_boons', count: 2 },
+
+    // "Surrender" gives up exactly ONE random held boon, no fight at all.
+    decline: { kind: 'fixed_penalty', penalty: { kind: 'lose_random_boons', count: 1 } },
+
+    // `grantedNames`/`removedNames` are string[] filled in by
+    // applyEliteOutcomeEffect() at resolution time.
+    winText: (grantedNames) =>
+      `You manage to fend off the Gem Hoarder, sending it stumbling back into its pile of treasures. It clutches its collection tightly, glaring at you with envy.\n\n\u201cMy precious...boons!\u201d\n\nWith the Hoarder defeated, you search through its collection and claim ${grantedNames.join(', ')} for yourself.`,
+    loseText: (removedNames) =>
+      `The Gem Hoarder overwhelms you and tears ${removedNames.join(' and ')} from your collection. It holds the prize close, its eyes gleaming with satisfaction.\n\n\u201cMine... two more for my collection.\u201d`,
+    declineText: (removedNames) =>
+      `You reluctantly hand over ${removedNames[0] || 'a boon'}. The Hoarder greedily gathers it into its collection, barely able to contain its excitement.\n\n\u201cYes... yes!\u201d\n\nIt steps aside, allowing you to pass.`,
+  },
+
+  {
+    id: 'cultist_ritual',
+    name: "Cultist's Ritual",
+    storyText:
+      "You stumble upon a lone cultist kneeling before a strange gemstone altar. Dark energy pulses through the chamber as the cultist chants an unfamiliar incantation.\n\n" +
+      "They notice you, but make no attempt to stop you.\n\n" +
+      "Whatever ritual they are performing, you suspect it will make your journey considerably more difficult.",
+    fightLabel: 'Interrupt the ritual',
+    declineLabel: 'Leave them be',
+
+    // gemCap: cannot clear more than this many of a random unlocked
+    // gem type this level (matches + incidental both count). Breaching
+    // it does NOT end the fight early — only checked at level-clear.
+    winCondition: { kind: 'gem_cap', gemCap: 30 },
+
+    // Both target-% effects are PERMANENT — they stack into
+    // boonEffectState.targetScoreMultiplier, same mechanism the
+    // global-score boons already use, so they affect every future
+    // level's target, not just this one.
+    onWin: { kind: 'target_percent', percent: -0.20 },
+    onLose: { kind: 'target_percent', percent: 0.20 },
+    decline: { kind: 'fixed_penalty', penalty: { kind: 'target_percent', percent: 0.10 } },
+
+    winText: "The ritual shatters as the cultist falls to the ground. The strange energy surrounding the altar rapidly fades.\n\nYou have disrupted the ritual before it could reach its full power. The target score for the rest of your journey decreases by 20%.",
+    loseText: "The ritual overwhelms you. The cultist returns to the altar as the dark energy surges through the chamber.\n\n\u201cYou should have left us alone.\u201d\n\nThe ritual continues, stronger than before. The target score for the rest of your journey increases by 20%.",
+    declineText: "You decide it is best not to interfere. The cultist resumes their chanting as you quietly leave the chamber.\n\nBehind you, the ritual grows louder. You feel the weight of the ritual settle upon your journey. The target score for the rest of your journey increases by 10%.",
+  },
+
+  {
+    id: 'gem_cultivator',
+    name: 'Gem Cultivator',
+    storyText:
+      "A strange man sits cross-legged in the middle of the tunnel, surrounded by a faint aura of shimmering gemstones. As you approach, his eyes immediately turn toward your score.\n\n" +
+      "\u201cSuch a fine fortune...\u201d he murmurs. \u201cI can sense its energy from here.\u201d\n\n" +
+      "He raises one hand, and the gemstones around him begin to glow.\n\n" +
+      "\u201cA fortune like that should not be left uncultivated.\u201d\n\n" +
+      "The gemstones around him begin to glow brighter. You can feel his energy reaching toward your fortune.\n\n" +
+      "You realize you have only a brief moment before his technique takes hold.",
+    fightLabel: 'Retaliate',
+    declineLabel: 'Slip away',
+
+    // thresholdPercent: 0.25 of (this level's target - score when the
+    // fight began), earned specifically from ONE random unlocked gem
+    // type (matches + incidental), must be reached before the level
+    // clears.
+    winCondition: { kind: 'gem_subscore_race', thresholdPercent: 0.25 },
+
+    // One-time score swings, NOT permanent — computed off the LIVE
+    // score at the moment the level actually clears (per design).
+    onWin: { kind: 'score_percent', percent: 0.50 },
+    onLose: { kind: 'score_percent', percent: -0.50 },
+
+    // "Slip away" is a 50/50 coinflip — success costs nothing,
+    // failure costs 25% of current score.
+    decline: {
+      kind: 'coinflip_penalty',
+      penalty: { kind: 'score_percent', percent: -0.25 },
+      successText: "You seize the brief opening and slip past the Cultivator. For a moment, you feel his presence following you... then it suddenly fades. You managed to get away safely.",
+      failureText: "You seize the brief opening and try to slip past the Cultivator. For a moment, you feel his presence following you... then it closes in. 25% of your current score is taken by the Gem Cultivator.",
+    },
+
+    winText: "You successfully harness the power of the gemstone before reaching your target. The Gem Cultivator's expression darkens as his technique collapses.\n\n\u201cImpossible... You have cultivated it faster than I could.\u201d\n\nYou take advantage of his hesitation and claim 50% of your current score as your reward.",
+    loseText: "The Gem Cultivator's technique overwhelms you. Before you can complete the challenge, the opportunity slips away.\n\nHe smiles as the gemstone's energy fades.\n\n\u201cWhat's yours is mine.\u201d\n\n50% of your current score is taken by the Gem Cultivator.",
   },
 ];
 
-// --- Challenge pool (unchanged this round) ---
+// --- Challenge pool (UNCHANGED from prior round) ---
 export const CHALLENGE_POOL = [
   {
     id: 'no_detonation',
