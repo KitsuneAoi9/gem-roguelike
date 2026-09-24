@@ -58,3 +58,25 @@ export function resetCurses() {
   curseState.activeCurses.length = 0;
   nextCursePickId = 1;
 }
+
+/**
+ * NEW — every currently-active curse whose effect.kind matches
+ * `kind`, returned as their FULL CURSE_POOL defs (not the lighter
+ * activeCurses entries) — a caller needs the def's own fields
+ * (effect.percent, name, description) to actually DO anything with
+ * it. Used by main.js to ask "is a recurring/triggered curse of THIS
+ * shape currently active" (right now, only the Crystallized Parasite's
+ * per-level score drain) without reaching into curseState directly
+ * or knowing its internal shape.
+ *
+ * @param {string} kind - an effect.kind value, e.g. 'parasite_score_drain'.
+ * @returns {object[]} matching CURSE_POOL defs, one per active pick.
+ *   In practice there's currently no way to hold two copies of the
+ *   same curse at once, but this returns every match rather than
+ *   silently assuming that stays true forever.
+ */
+export function getActiveCurseDefsByKind(kind) {
+  return curseState.activeCurses
+    .map(activeCurse => CURSE_POOL.find(c => c.id === activeCurse.id))
+    .filter(def => def && def.effect?.kind === kind);
+}

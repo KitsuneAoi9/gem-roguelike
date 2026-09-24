@@ -9,86 +9,37 @@
 15. Gamble boon, double or nothing. Either repeatedly or one chance
 
 
-
-
-
-17. Update boon + boon card design
-
-// Claude is done
-18. Update Rarity opdds - > Common: 50% | Uncommon: 25% | Rare: 15% | Epic: 8% | Legendary: 2% (Increased by Luck stat).
-19. Legendary won't appear until level 6 (including shops)
-16. Star is still being treated as gems.
-
-
-
-I need you to help me change the boon as follows:
-
-A. Series type
-
-Each series will have all 11 types of gems corresponding to it.
-For example: Affinity series - [Gem] Affinity
-Amethyst Affinity
-Diamond Affinity
-Emerald Affinity
-Garnet Affinity
-Ruby Affinity
-Sapphire Affinity
-Topaz Affinity
-Onyx Affinity
-Aquamarine Affinity
-Bloodstone Affinity
-Pearl Affinity
-
-Series      Description	                                Type	    Rarity	    Max Occurrences
-Affinity    Matching [gem] grants +100 bonus score. 	BUFF	    COMMON	    1
-
-Frenzy      [gem] matches gain +200 bonus score,        RISKY_BUFF	UNCOMMON	1
-            but [two other random gems] matches lose 
-            -50 bonus score.
-
-Polish	    Increase [gem] base score value by +5 and	BUFF	    COMMON	    Unlimited
-            multiplier value by +0.1.
-
-Bounty	    Increase the base score value of [gem]      BUFF	    UNCOMMON	2
-            by +20.	
-
-Brilliance	Increase the base score value of [gem]	    RISKY_BUFF	RARE	    3
-            by +50, but decrease [another random gem]
-            and [another random gem] base score value
-            of by -10.
-
-Opulence	    Increase the base score value of [gem]      RISKY_BUFF	EPIC	    2
-            by +250, but decrease the base score value
-            of non-[gem] gems by -10.
-
-Grandeur	Increase the base score value of [gem]      BUFF	    LEGENDARY	1
-            by +500.
-
-Enthusiast	Increase the base multiplier value of       BUFF	    COMMON	    2
-            [gem] by +0.5.
-
-Addict	    Increase the base multiplier value of       RISKY_BUFF	RARE	    2
-            [gem] by +2.0, but decrease
-            [another random gem] and 
-            [another random gem] base multiplier 
-            value of by -0.5.
-
-Maniac	    Increase the base multiplier value of       BUFF	    EPIC	    2
-            [gem] by +2.5.	
-
-Fanatic	    Increase the base multiplier value of       BUFF	    LEGENDARY	1
-            [gem] by +15.0.	
-
-
-B. Non-series type
-Name        Description	                                        Type	    Rarity	    Max Occurrences
-Jeweler	    Increase all gem base score value by +25.	        BUFF	    EPIC	    2
-Gemologist	Increase all gem base multiplier value by +1.5	    BUFF	    LEGENDARY	2
-
-
-2026/09/23
 1. Star gem can destroy another star gem if they both come from the same gem
+
+
 2. Getting special gems
 OO
 OO
 OO
+
+3. Star exploded by another special gems, doesn't do anything
+
+
+
+
+
+Thanks, next I need help fixing the following
+
+For the hint, If i click around, the hint won't show up. The user needs to stay still for hint to start the count down. Always start/restart the count down after successful match and the cascade is done, regardless any attempt to fail match.
+After the elite/challenge, show the result dialog screen with flavor text and the rewards/ penalty (same as the on pops up in the history).
+For the even dialog, I want to enter new line in between , how do I do that? Also, can you make then align left, for the text?
+For the boon rewards, can you make them dashed underlined and show tooltips when hover over them?. Also color code the boon name based on the rarity as well (The color is the same color we use for the boon card order). Same applies for the curse as well
+I want to change Gem Cultivator fight but lose rewards from deducting your score to him implanting a parasite curse which will sap 15% of your score at the end of the level, before entering the shop. here is the lose text which i already updated.
+ loseText: "The Gem Cultivator's technique overwhelms you. Before you can complete the challenge, the opportunity slips away.He smiles as the gemstone's energy fades. \"Your talent may be lacking, but your body will more than make up for it.\"\n\n\u201cA strange parasite emerges from his hand and burrows into your body before you can react.A parasite curse has been implanted within you.",
+On the Gem Stats screen, put another divider below the Gems, add display target score multiplier.
+Below the Gem Stats screen, add a Curse screen, that show a list of active curse. I leave the design to you for now. Will think of the details afterwards.
+
+
+TO fixing
+
+1 For the belt, put it right below the the text line that is below the board..
+
+2 As for the choice for the encounter event, line them in a column and put a number like this
+1. option 1 text here
+2. option 2 text here
+3. option 3 text here

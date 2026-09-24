@@ -99,14 +99,14 @@ function intersectionCell(cells) {
 }
 
 /** Every cell a Row Laser clears in addition to itself: its full row. */
-function laserRowBlastCells(row, col) {
+export function laserRowBlastCells(row, col) {
   const cells = [];
   for (let c = 0; c < SIZE; c++) cells.push([row, c]);
   return cells;
 }
 
 /** Every cell a Column Laser clears in addition to itself: its full column. */
-function laserColBlastCells(row, col) {
+export function laserColBlastCells(row, col) {
   const cells = [];
   for (let r = 0; r < SIZE; r++) cells.push([r, col]);
   return cells;
@@ -153,7 +153,7 @@ function radialBurstCells(row, col) {
  * @param {number} col
  * @returns {[number, number][]}
  */
-function dischargerBlastCells(row, col) {
+export function dischargerBlastCells(row, col) {
   const cells = [];
   // Walk the diamond's 5x5 bounding box, then drop anything outside
   // Manhattan distance 2 — simpler than hand-listing each of the 12

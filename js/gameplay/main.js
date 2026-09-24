@@ -38,6 +38,8 @@ import {
   calculateBoonPrice, shopTierForLevel, resetBoonShop,
 } from './boon_shop.js';
 
+import { resetCurses, getActiveCurseDefsByKind } from './curse.js'; // CHANGED — added getActiveCurseDefsByKind
+
 import { getGemBaseScore, getGemBaseMultiplier } from './gem_base.js';
 import { addHistoryEntry, resetHistory } from './history.js';
 
@@ -77,6 +79,9 @@ import {
   TILE_SHAPES, GEM_DEFINITIONS, ALL_GEM_CATALOG
 } from '../resources/constant/constants.js';
 
+import { CURSE_POOL } from '../resources/curse/curse.js'; // NEW
+import { curseState } from '../resources/curse/curse_state.js'; // NEW
+
 import {
   tryTriggerEvent, buildEncounterOffer, resolveEncounterAccept, resolveEncounterDecline,
   pickEliteDef, startEliteFight, declineElite, resolveEliteOutcome, getEliteProgressInfo,
@@ -84,11 +89,11 @@ import {
   resolveChallengeOutcome, getActiveChallengeDef, resetEvents,
   placeFortunesFollyBet, flipFortunesFollyDoubleOrNothing, payFortunesFollyAndLeave,
   resolveLostMinerHelp, resolveLostMinerAbsorb,
-  recordEliteGemActivity, // NEW
+  recordEliteGemActivity,
+  formatNamedEffectSpan, // NEW
 } from './event.js';
 import { EVENT_TYPE } from '../resources/event/event.js';
 import { activeEventState } from '../resources/event/event_state.js';
-import { resetCurses } from './curse.js'; // NEW
 
 import {
   GAME_NAME, GAME_TAGLINE, BUTTONS, DIALOG_TITLES, MESSAGES, GAME_VERSION
@@ -96,9 +101,21 @@ import {
 
 import { historyState } from '../resources/history/history_state.js';
 import { boonShopState } from '../resources/shop/boon_shop_state.js';
+import { consumableShopState } from '../resources/shop/consumable_shop_state.js';
 import { SPECIAL_GEM_TYPE } from '../resources/special%20gem/special_gem.js';
 import { specialGemState } from '../resources/special%20gem/special_gem_state.js';
 import { progressionState } from '../resources/progression/progression.js';
+
+import {
+  addConsumableToInventory, removeConsumableFromInventory, findFirstConsumableOfType,
+  hasBeltSpace, resetConsumables, triggerPickaxe, triggerDynamite, triggerDiceShuffle,
+} from './consumable.js';
+import {
+  rollConsumableShopOffer, calculateConsumablePrice, isConsumablePurchasedThisVisit,
+  markConsumablePurchased, resetConsumableShop,
+} from './consumable_shop.js';
+import { CONSUMABLE_INFO, CONSUMABLE_TYPE } from '../resources/consumable/consumable.js';
+import { consumableState } from '../resources/consumable/consumable_state.js';
 
 // --- DOM references, grabbed once ---
 const boardEl         = document.getElementById('board');
@@ -129,6 +146,8 @@ const boonChoicesEl   = document.getElementById('boon-choices');
 const globalMultiplierEl = document.getElementById('global-multiplier');
 const globalBonusEl      = document.getElementById('global-bonus');
 const gemStatsListEl     = document.getElementById('gem-stats-list');
+const targetMultiplierEl = document.getElementById('target-multiplier'); // NEW
+const curseListEl        = document.getElementById('curse-list');       // NEW
 
 const historyListEl = document.getElementById('history-list');
 const shopDialogEl    = document.getElementById('shop-dialog');
@@ -152,6 +171,11 @@ const eventDialogEl   = document.getElementById('event-dialog');
 const eventTitleEl    = document.getElementById('event-title');
 const eventStoryEl    = document.getElementById('event-story');
 const eventChoicesEl  = document.getElementById('event-choices');
+
+// NEW — the 3 fixed belt slot elements, and the two new dialog pieces.
+const beltSlotEls = document.querySelectorAll('#consumable-belt .belt-slot');
+const goldenTicketStatusEl = document.getElementById('golden-ticket-status');
+const consumableShopChoicesEl = document.getElementById('consumable-shop-choices');
 
 // --- mutable game state ---
 let grid;
@@ -212,6 +236,28 @@ let shopEntryScore = 0;
 // screen. Started once in init(); left running for the rest of the
 // page's life (it's a cheap no-op whenever nothing is active).
 let objectiveIntervalId = null;
+
+// NEW — stashed by applyScoreGain() whenever an Elite/Challenge
+// resolves as part of THAT gain (win, lose, whatever it fired). Read
+// and cleared by resolveMatches()'s deferred level-up flow, so the
+// player sees a proper result DIALOG (not just a History line) for
+// what just happened, shown right before the "Level Cleared!" dialog.
+let pendingEventResult = null;
+
+// NEW — set while a target-requiring consumable (Pickaxe/Dynamite) is
+// armed, waiting for the player's next board click. Mirrors
+// placementMode's "next click does something special" pattern.
+let pendingConsumableEntry = null;
+
+// NEW — Golden Ticket bookkeeping. `pendingGoldenTicketTurn` is set
+// true at the very top of attemptSwap() (a real player-initiated swap
+// attempt) and cleared either immediately (if the swap is invalid) or
+// once its full cascade settles inside resolveMatches() — see both
+// for why this is the one reliable way to detect "a whole swap+
+// cascade turn just finished," independent of which of attemptSwap()'s
+// 8 dispatch cases actually fired.
+let pendingGoldenTicketTurn = false;
+let goldenTicketTurnsRemaining = 0;
 
 /**
  * Sets every bit of static, non-runtime-dependent text (title,
@@ -319,6 +365,66 @@ function renderSideStats() {
     `;
     gemStatsListEl.appendChild(row);
   });
+  // NEW (item 6) — target score multiplier footer row, directly
+  // below the gem list. Reads the SAME
+  // boonEffectState.targetScoreMultiplier that every scoreTarget
+  // calculation already multiplies by — this is a read-only display,
+  // nothing here can change the number itself.
+  targetMultiplierEl.textContent = `${boonEffectState.targetScoreMultiplier.toFixed(2)}x`;
+  targetMultiplierEl.className = `side-stat-value ${statDiffClass(boonEffectState.targetScoreMultiplier, 1.0)}`;
+
+  // NEW (item 7) — refresh the active-curses list every time stats
+  // refresh. Curses are only ever granted alongside a
+  // renderSideStats() call that's already happening somewhere (Lost
+  // Miner's absorb, an Elite loss) — folding this in here means
+  // every existing call site updates the curse panel automatically,
+  // no need to hunt down and add a second call at each curse-granting
+  // site individually.
+  renderCursePanel();
+}
+
+/**
+ * NEW (item 7) — rebuilds the "Active Curses" list at the bottom of
+ * the side-stats panel from curseState.activeCurses, from scratch,
+ * every call — same "just rebuild it" convention as
+ * renderSideStats()/renderHistoryPanel(). Shows a plain "No active
+ * curses." line when the list is empty, instead of leaving a blank
+ * gap that could read as a rendering bug.
+ *
+ * Each curse name is rendered as the same dashed-underline, tooltip-
+ * bearing span used for boon names elsewhere (formatNamedEffectSpan(),
+ * gameplay/event.js), flagged `isCurse: true` so it gets the
+ * dedicated curse color instead of a rarity color (curses don't have
+ * a rarity of their own).
+ *
+ * @returns {void}
+ */
+function renderCursePanel() {
+  curseListEl.innerHTML = '';
+
+  if (curseState.activeCurses.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'curse-empty';
+    empty.textContent = 'No active curses.';
+    curseListEl.appendChild(empty);
+    return;
+  }
+
+  curseState.activeCurses.forEach(activeCurse => {
+    // Look up the full curse DEFINITION (name/description) off its
+    // id — activeCurses entries themselves only carry the lightweight
+    // pickId/id/pickedAtLevel/appliedEffect shape, same split every
+    // other active-pick list in the game uses.
+    const def = CURSE_POOL.find(c => c.id === activeCurse.id);
+    if (!def) return; // shouldn't happen, but don't crash on a stale/unknown id
+
+    const row = document.createElement('div');
+    row.className = 'curse-entry';
+    // innerHTML (not textContent) is required — formatNamedEffectSpan()
+    // returns real <span> markup (tooltip/color/underline), not plain text.
+    row.innerHTML = formatNamedEffectSpan(def, true);
+    curseListEl.appendChild(row);
+  });
 }
 
 /**
@@ -342,15 +448,250 @@ function renderSideStats() {
  */
 function renderHistoryPanel() {
   historyListEl.innerHTML = '';
-  // .slice().reverse() so historyState.entries ITSELF stays
-  // oldest-first (natural push order, easiest to reason about) —
-  // only the DISPLAY is newest-first.
   historyState.entries.slice().reverse().forEach(entry => {
     const row = document.createElement('div');
     row.className = `history-entry history-entry--${entry.tone}`;
-    row.textContent = entry.text;
+    // CHANGED — innerHTML instead of textContent, same reasoning as
+    // showEventResult() above: an entry's text can now carry a styled
+    // boon/curse-name <span> (Elite/Encounter/Lost Miner outcome
+    // lines) that needs to render as real markup, not literal tags.
+    row.innerHTML = entry.text;
     historyListEl.appendChild(row);
   });
+}
+
+/**
+ * NEW — rebuilds the 3-slot consumable belt from consumableState.inventory,
+ * from scratch, every call — same "just rebuild it" convention every
+ * other panel in this game uses. An empty slot is left blank; a
+ * filled one shows the item's icon and a hover tooltip
+ * (name + description), and is wired to onBeltSlotClick() unless it's
+ * a passive item (Resurrection Cross — nothing to click).
+ *
+ * @returns {void}
+ */
+function renderConsumableBelt() {
+  beltSlotEls.forEach((slotEl, i) => {
+    slotEl.innerHTML = '';
+    slotEl.classList.remove('belt-slot--filled', 'belt-slot--clickable');
+    slotEl.removeAttribute('data-tooltip');
+    slotEl.onclick = null;
+
+    const entry = consumableState.inventory[i];
+    if (!entry) return; // this slot is empty — leave it blank
+
+    const info = CONSUMABLE_INFO[entry.type];
+    slotEl.classList.add('belt-slot--filled');
+    slotEl.dataset.tooltip = `${info.name} — ${info.description}`;
+
+    const icon = document.createElement('div');
+    icon.className = 'belt-slot-icon';
+    icon.style.backgroundImage = `url('css/model/svg/consumables/${info.file}')`;
+    slotEl.appendChild(icon);
+
+    if (!info.passive) {
+      slotEl.classList.add('belt-slot--clickable');
+      slotEl.onclick = () => onBeltSlotClick(entry);
+    }
+  });
+}
+
+/**
+ * NEW — handles a click on a filled, non-passive belt slot. Target-
+ * requiring items (Pickaxe/Dynamite) arm targeting mode and wait for
+ * the next board click; everything else (Dice/Golden Ticket)
+ * activates immediately.
+ *
+ * @param {object} entry - the consumableState.inventory entry that
+ *   was clicked (has .pickId/.type).
+ * @returns {void}
+ */
+function onBeltSlotClick(entry) {
+  if (busy) return;
+  if (placementMode || pendingConsumableEntry) return; // don't stack modes
+
+  const info = CONSUMABLE_INFO[entry.type];
+  if (info.passive) return; // shouldn't be reachable (not wired to onclick), safety net anyway
+
+  if (info.requiresTarget) {
+    pendingConsumableEntry = entry;
+    messageEl.textContent = `select a gem to use your ${info.name} on`;
+    return;
+  }
+
+  if (entry.type === CONSUMABLE_TYPE.DICE) {
+    activateDiceConsumable(entry);
+  } else if (entry.type === CONSUMABLE_TYPE.GOLDEN_TICKET) {
+    activateGoldenTicketConsumable(entry);
+  }
+}
+
+/**
+ * NEW — handles the board click that lands while a target-requiring
+ * consumable (Pickaxe/Dynamite) is armed. Clicking a BLOCKED cell is
+ * a no-op (doesn't consume the item or cancel targeting) so a misclick
+ * doesn't waste it — only a valid target actually spends it.
+ *
+ * @param {number} row
+ * @param {number} col
+ * @returns {void}
+ */
+function handleConsumableTargetClick(row, col) {
+  if (grid[row][col] === BLOCKED) return;
+
+  const entry = pendingConsumableEntry;
+  pendingConsumableEntry = null;
+
+  busy = true;
+  messageEl.textContent = '';
+
+  let clearedCells = [];
+  let comboLabel = '';
+  if (entry.type === CONSUMABLE_TYPE.PICKAXE) {
+    clearedCells = triggerPickaxe(grid, row, col);
+    comboLabel = 'Pickaxe';
+  } else if (entry.type === CONSUMABLE_TYPE.DYNAMITE) {
+    clearedCells = triggerDynamite(grid, row, col);
+    comboLabel = 'Dynamite';
+  }
+
+  // Consumed the instant it's activated, whether or not it actually
+  // cleared anything useful — no refunds, same rule every other
+  // one-shot item in this game follows.
+  removeConsumableFromInventory(entry.pickId);
+  renderConsumableBelt();
+
+  if (clearedCells.length === 0) {
+    // Nothing there to destroy — still spent the item, just nothing
+    // to score or cascade.
+    busy = false;
+    checkEndState();
+    return;
+  }
+
+  // Fresh cascade baseline — same reasoning finishSwapActivatedCombo()
+  // follows for the 7 swap-activated combos.
+  comboCount = 0;
+
+  // Everything a consumable clears is scored as flat incidental cells
+  // (no match-size multiplier bonus), even a chain-reaction Hyperstar
+  // wipe — deliberately simpler than trying to replicate the swap
+  // version's favorable "matched group" treatment for an arbitrary,
+  // possibly-mixed-source clear. Flagged in the handoff.
+  const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
+  const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
+
+  const leveledUp = applyScoreGain(gained, `${comboLabel}: ${signed(gained)}`);
+  if (leveledUp) pendingLevelUp = true;
+
+  markMatchedGems(boardEl, toBooleanGrid(clearedCells));
+
+  // NOT routed through recordEliteGemActivity()/markChallengeDetonation()
+  // — consumables don't interact with an active Elite/Challenge's
+  // tracking yet. Known gap, see handoff.
+  continueCascadeAfterMatch(clearedCells);
+}
+
+/**
+ * NEW — Dice: shuffles the board, then lets the NORMAL cascade
+ * pipeline catch and resolve any matches the shuffle happens to
+ * create (allowed to happen, not guarded against — a nice bonus).
+ * Doesn't set pendingGoldenTicketTurn, so using Dice never burns a
+ * Golden Ticket turn even though it goes through the same
+ * resolveMatches() code path a real swap does.
+ *
+ * @param {object} entry
+ * @returns {void}
+ */
+function activateDiceConsumable(entry) {
+  busy = true;
+  messageEl.textContent = '';
+
+  triggerDiceShuffle(grid);
+
+  removeConsumableFromInventory(entry.pickId);
+  renderConsumableBelt();
+  renderBoardWithInteractions();
+
+  addHistoryEntry('event', 'Dice shuffles the board.', 'event');
+  renderHistoryPanel();
+
+  comboCount = 0;
+  // No swapCells — this isn't a swap, so any special gem that DOES
+  // happen to spawn from an accidental match falls back to the
+  // normal middle/intersection spawn rule (no "swap cell" to prefer).
+  resolveMatches();
+}
+
+/**
+ * NEW — Golden Ticket: (re)starts the 2x-score window at
+ * GOLDEN_TICKET_TURNS turns, overwriting rather than stacking if one
+ * was already active.
+ *
+ * @param {object} entry
+ * @returns {void}
+ */
+function activateGoldenTicketConsumable(entry) {
+  goldenTicketTurnsRemaining = GOLDEN_TICKET_TURNS;
+  removeConsumableFromInventory(entry.pickId);
+  renderConsumableBelt();
+  updateGoldenTicketStatus();
+
+  addHistoryEntry('event', `Golden Ticket activated — score doubled for the next ${GOLDEN_TICKET_TURNS} turns!`, 'positive');
+  renderHistoryPanel();
+}
+
+/**
+ * NEW — decrements the Golden Ticket counter by one, IF one is
+ * active. Called exactly once per completed player-swap turn — see
+ * pendingGoldenTicketTurn's doc comment for why resolveMatches()'s
+ * settle branch is the one reliable place to call this from.
+ *
+ * @returns {void}
+ */
+function consumeGoldenTicketTurnIfActive() {
+  if (goldenTicketTurnsRemaining > 0) {
+    goldenTicketTurnsRemaining--;
+    updateGoldenTicketStatus();
+  }
+}
+
+/** Shows/hides and updates the Golden Ticket status banner text. */
+function updateGoldenTicketStatus() {
+  if (goldenTicketTurnsRemaining > 0) {
+    const plural = goldenTicketTurnsRemaining === 1 ? '' : 's';
+    goldenTicketStatusEl.textContent = `\u2728 Golden Ticket — ${goldenTicketTurnsRemaining} turn${plural} left (2x score)`;
+    goldenTicketStatusEl.classList.remove('hidden');
+  } else {
+    goldenTicketStatusEl.classList.add('hidden');
+  }
+}
+
+/**
+ * NEW — buys one consumable from the shop's consumable offer:
+ * deducts its price, adds it to the belt, marks it purchased this
+ * visit, and re-renders everything affected.
+ *
+ * @param {string} type - a CONSUMABLE_TYPE value.
+ * @param {number} price
+ * @returns {void}
+ */
+function buyConsumableFromShop(type, price) {
+  if (score < price) return;       // safety net — card shouldn't be clickable here
+  if (!hasBeltSpace()) return;     // safety net — same
+
+  score -= price;
+  scoreEl.textContent = score;
+
+  addConsumableToInventory(type);
+  markConsumablePurchased(type);
+  renderConsumableBelt();
+
+  const info = CONSUMABLE_INFO[type];
+  addHistoryEntry('boon', `Bought from shop: ${info.name} (-${price}) — ${info.description}`, 'boon');
+  renderHistoryPanel();
+
+  renderShopDialog(); // reflect new score + this card's bought state (and belt-full state on the others)
 }
 
 /**
@@ -570,6 +911,8 @@ function init() {
   resetBoonShop();
   resetEvents(); // NEW — alongside every other resetX() call
   resetCurses(); // NEW — alongside resetEvents()
+  resetConsumables();      // NEW — alongside resetEvents()/resetCurses()
+  resetConsumableShop();   // NEW
 
   // resetTiles() (just above, already called) seeds tileState.blockedCells
   // with the starting blocked ring; pre-allocate a fully-blocked grid of
@@ -595,6 +938,10 @@ function init() {
   comboCount = 0;
   pendingContinuation = null;
   pendingLevelUp = false;
+  pendingEventResult = null; // NEW
+  pendingConsumableEntry = null;     // NEW
+  pendingGoldenTicketTurn = false;   // NEW
+  goldenTicketTurnsRemaining = 0;    // NEW
 
   scoreEl.textContent = score;
   movesEl.textContent = moves;
@@ -620,6 +967,8 @@ function init() {
   scheduleHintTimer(); // NEW — the very first idle moment, before any match has happened yet
   updateObjectiveBanner(); // NEW — hides the banner on a fresh run (resetEvents() cleared activeEventState)
   startObjectiveTicker();  // NEW — starts (or restarts) the 1-second countdown tick
+  renderConsumableBelt();  // NEW — clears the belt display for a fresh run
+  updateGoldenTicketStatus(); // NEW — hides the status banner on a fresh run
 }
 
 /**
@@ -715,7 +1064,11 @@ function startObjectiveTicker() {
  * @returns {void}
  */
 function showEventResult(text, onContinue) {
-  eventStoryEl.textContent = text;
+  // NEW — always reset to the default centered layout for this one
+  // Continue button, regardless of whether the dialog that led here
+  // was list-styled (an Encounter) or not (Elite/Challenge).
+  eventChoicesEl.className = 'event-choices';
+  eventStoryEl.innerHTML = text;
   eventChoicesEl.innerHTML = '';
   const continueBtn = document.createElement('button');
   continueBtn.textContent = 'Continue';
@@ -724,6 +1077,30 @@ function showEventResult(text, onContinue) {
     onContinue();
   });
   eventChoicesEl.appendChild(continueBtn);
+}
+
+/**
+ * NEW (item 2) — shows an Elite/Challenge's outcome as a proper
+ * dialog (title + flavor/result text + a Continue button), reusing
+ * the SAME shared #event-dialog every other event already uses.
+ * Previously this text only ever reached the History panel — the
+ * player had no in-the-moment popup telling them what an Elite fight
+ * or Challenge actually resulted in; they'd have to go notice it in
+ * the side history log after the fact.
+ *
+ * @param {{title: string, text: string}} result - stashed by
+ *   applyScoreGain() the moment an Elite/Challenge resolves.
+ * @param {() => void} onContinue - what to do once the player
+ *   dismisses this dialog (normally: show the "Level Cleared!" dialog next).
+ * @returns {void}
+ */
+function showEliteChallengeResultDialog(result, onContinue) {
+  eventTitleEl.textContent = result.title;
+  eventDialogEl.classList.remove('hidden');
+  // showEventResult() builds the body text + Continue button, and
+  // hides the dialog again once clicked — same shared helper every
+  // other event outcome already funnels through.
+  showEventResult(result.text, onContinue);
 }
 
 /**
@@ -750,10 +1127,12 @@ function showGemMoleDialog(offer, onContinue) {
 
   eventTitleEl.textContent = def.name;
   eventStoryEl.textContent = def.storyText;
+  // NEW — numbered, single-column list, per design ask (Encounter only).
+  eventChoicesEl.className = 'event-choices event-choices--list';
   eventChoicesEl.innerHTML = '';
 
   const acceptBtn = document.createElement('button');
-  acceptBtn.textContent = def.acceptLabel;
+  acceptBtn.textContent = `1. ${def.acceptLabel}`; // CHANGED — numbered
   acceptBtn.addEventListener('click', () => {
     const { givenName, receivedName } = resolveEncounterAccept(tradeAwayBoon, replacementDef);
     renderSideStats();
@@ -764,7 +1143,7 @@ function showGemMoleDialog(offer, onContinue) {
   });
 
   const declineBtn = document.createElement('button');
-  declineBtn.textContent = def.declineLabel;
+  declineBtn.textContent = `2. ${def.declineLabel}`; // CHANGED — numbered
   declineBtn.addEventListener('click', () => {
     resolveEncounterDecline();
     addHistoryEntry('event', `Encounter — ${def.name}: ${def.resultDeclineText}`, 'event');
@@ -786,17 +1165,21 @@ function showGemMoleDialog(offer, onContinue) {
 function showFortunesFollyDialog(def, onContinue) {
   eventTitleEl.textContent = def.name;
   eventStoryEl.textContent = def.storyText;
+  eventChoicesEl.className = 'event-choices event-choices--list'; // NEW
   eventChoicesEl.innerHTML = '';
 
-  def.betOptions.forEach(opt => {
+  def.betOptions.forEach((opt, index) => {
     const btn = document.createElement('button');
-    btn.textContent = opt.label;
+    btn.textContent = `${index + 1}. ${opt.label}`; // CHANGED — numbered (1-5)
     btn.addEventListener('click', () => handleFollyInitialBet(def, opt.percent, onContinue));
     eventChoicesEl.appendChild(btn);
   });
 
   const payBtn = document.createElement('button');
-  payBtn.textContent = def.payAndLeave.label;
+  // CHANGED — numbered as the NEXT number after however many bet
+  // options exist, rather than a hardcoded "6." — stays correct even
+  // if betOptions' length ever changes.
+  payBtn.textContent = `${def.betOptions.length + 1}. ${def.payAndLeave.label}`;
   payBtn.addEventListener('click', () => handleFollyPayAndLeave(def, onContinue));
   eventChoicesEl.appendChild(payBtn);
 
@@ -851,19 +1234,20 @@ function handleFollyPayAndLeave(def, onContinue) {
 function showFollyPostWin(def, pot, introText, onContinue) {
   eventTitleEl.textContent = def.name;
   eventStoryEl.textContent = introText;
+  eventChoicesEl.className = 'event-choices event-choices--list'; // NEW
   eventChoicesEl.innerHTML = '';
 
   const doubleBtn = document.createElement('button');
-  doubleBtn.textContent = def.doubleLabel;
+  doubleBtn.textContent = `1. ${def.doubleLabel}`; // CHANGED — numbered
   doubleBtn.addEventListener('click', () => handleFollyDoubleOrNothing(def, pot, onContinue));
 
   const cashOutBtn = document.createElement('button');
-  cashOutBtn.textContent = def.cashOutLabel;
+  cashOutBtn.textContent = `2. ${def.cashOutLabel}`; // CHANGED — numbered
   cashOutBtn.addEventListener('click', () => handleFollyCashOut(def, pot, onContinue));
 
   eventChoicesEl.appendChild(doubleBtn);
   eventChoicesEl.appendChild(cashOutBtn);
-  eventDialogEl.classList.remove('hidden'); // already open — idempotent, kept for clarity
+  eventDialogEl.classList.remove('hidden');
 }
 
 /** One Double-or-Nothing flip. A win loops back into showFollyPostWin(); a loss ends the event with no further score change. */
@@ -898,10 +1282,11 @@ function handleFollyCashOut(def, pot, onContinue) {
 function showLostMinerDialog(def, onContinue) {
   eventTitleEl.textContent = def.name;
   eventStoryEl.textContent = def.storyText;
+  eventChoicesEl.className = 'event-choices event-choices--list'; // NEW
   eventChoicesEl.innerHTML = '';
 
   const helpBtn = document.createElement('button');
-  helpBtn.textContent = def.helpLabel;
+  helpBtn.textContent = `1. ${def.helpLabel}`; // CHANGED — numbered
   helpBtn.addEventListener('click', () => {
     const { scoreDelta } = resolveLostMinerHelp(score, def);
     score += scoreDelta;
@@ -912,19 +1297,20 @@ function showLostMinerDialog(def, onContinue) {
   });
 
   const absorbBtn = document.createElement('button');
-  absorbBtn.textContent = def.absorbLabel;
+  absorbBtn.textContent = `2. ${def.absorbLabel}`; // CHANGED — numbered
   absorbBtn.addEventListener('click', () => {
-    const { grantedBoonName, curseName } = resolveLostMinerAbsorb();
-    renderSideStats(); // the boon AND the curse both touched gemBaseState/boonEffectState
-    const boonPart = grantedBoonName || 'nothing of value';
-    const text = def.absorbResultText(boonPart, curseName);
+    const { grantedBoonDef, curseDef } = resolveLostMinerAbsorb();
+    renderSideStats();
+    const boonPart = grantedBoonDef ? formatNamedEffectSpan(grantedBoonDef) : 'nothing of value';
+    const cursePart = formatNamedEffectSpan(curseDef, true);
+    const text = def.absorbResultText(boonPart, cursePart);
     addHistoryEntry('event', `Lost Miner: ${text}`, 'negative');
     renderHistoryPanel();
     showEventResult(text, onContinue);
   });
 
   const leaveBtn = document.createElement('button');
-  leaveBtn.textContent = def.leaveLabel;
+  leaveBtn.textContent = `3. ${def.leaveLabel}`; // CHANGED — numbered
   leaveBtn.addEventListener('click', () => {
     addHistoryEntry('event', `Lost Miner: ${def.leaveResultText}`, 'event');
     renderHistoryPanel();
@@ -941,14 +1327,12 @@ function showLostMinerDialog(def, onContinue) {
 function showEliteDialog(def, onContinue) {
   eventTitleEl.textContent = def.name;
   eventStoryEl.textContent = def.storyText;
+  eventChoicesEl.className = 'event-choices event-choices--list'; // NEW
   eventChoicesEl.innerHTML = '';
 
   const fightBtn = document.createElement('button');
-  fightBtn.textContent = def.fightLabel;
+  fightBtn.textContent = `1. ${def.fightLabel}`; // CHANGED — numbered
   fightBtn.addEventListener('click', () => {
-    // startEliteFight() now owns EVERYTHING about setting the fight
-    // up (target doubling for a time_race, rolling a gem + threshold
-    // for the other two kinds) — main.js just refreshes the DOM.
     startEliteFight(def, score);
     targetEl.textContent = progressionState.scoreTarget;
     addHistoryEntry('event', `Elite — ${def.name}: you accept the challenge!`, 'event');
@@ -959,10 +1343,8 @@ function showEliteDialog(def, onContinue) {
   });
 
   const declineBtn = document.createElement('button');
-  declineBtn.textContent = def.declineLabel;
+  declineBtn.textContent = `2. ${def.declineLabel}`; // CHANGED — numbered
   declineBtn.addEventListener('click', () => {
-    // declineElite() fully resolves its own text (including the
-    // coinflip branch) and hands back a ready scoreDelta/resultText.
     const result = declineElite(def, score);
     if (result.scoreDelta) {
       score += result.scoreDelta;
@@ -1019,6 +1401,39 @@ function attemptEvent(onContinue) {
   }
 }
 
+/** Builds and shows the Challenge dialog (accept-or-decline). */
+function showChallengeDialog(def, onContinue) {
+  eventTitleEl.textContent = def.name;
+  eventStoryEl.textContent = def.storyText;
+  eventChoicesEl.className = 'event-choices event-choices--list'; // NEW
+  eventChoicesEl.innerHTML = '';
+
+  const acceptBtn = document.createElement('button');
+  acceptBtn.textContent = `1. ${def.acceptLabel}`; // CHANGED — numbered
+  acceptBtn.addEventListener('click', () => {
+    startChallenge(def);
+    addHistoryEntry('event', `Challenge — ${def.name}: you accept the challenge!`, 'event');
+    renderHistoryPanel();
+    updateObjectiveBanner();
+    eventDialogEl.classList.add('hidden');
+    onContinue();
+  });
+
+  const declineBtn = document.createElement('button');
+  declineBtn.textContent = `2. ${def.declineLabel}`; // CHANGED — numbered
+  declineBtn.addEventListener('click', () => {
+    declineChallenge();
+    addHistoryEntry('event', `Challenge — ${def.name}: declined.`, 'event');
+    renderHistoryPanel();
+    eventDialogEl.classList.add('hidden');
+    onContinue();
+  });
+
+  eventChoicesEl.appendChild(acceptBtn);
+  eventChoicesEl.appendChild(declineBtn);
+  eventDialogEl.classList.remove('hidden');
+}
+
 /**
  * Adds `gained` to the score, updates the display, and advances the
  * level (possibly more than once) if the new score clears the current
@@ -1044,6 +1459,17 @@ function attemptEvent(onContinue) {
  * @returns {boolean} true if at least one level was cleared.
  */
 function applyScoreGain(gained, popupText) {
+  // NEW — Golden Ticket: double whatever's being added, AFTER the
+  // normal scoring pipeline has already fully computed `gained` at
+  // the call site (via calculateCascadeStepScore()) — deliberately
+  // the LAST multiplier applied, on top of everything else. Doubling
+  // here (rather than at each of the many call sites) covers every
+  // score-gain path in the game for free — matches, all 7 swap
+  // combos, and consumable clears alike.
+  if (goldenTicketTurnsRemaining > 0) {
+    gained *= 2;
+  }
+
   score += gained;
   scoreEl.textContent = score;
 
@@ -1075,6 +1501,23 @@ function applyScoreGain(gained, popupText) {
       moves += LEVEL_UP_BONUS_MOVES;
     }
     leveledUp = true;
+
+    // NEW (item 5) — Crystallized Parasite: a recurring, TRIGGERED drain
+    // (resources/curse/curse.js), not a static stat delta, so it
+    // never goes through applyBoonEffect() at all. Checked fresh on
+    // EVERY level this while-loop crosses — a multi-level jump drains
+    // once per level, compounding on whatever score is left after
+    // the previous drain. "At the end of the level, before any shop
+    // visit" is satisfied for free just by being HERE: this whole
+    // while loop finishes well before proceedAfterBoonPick() ever
+    // gets a chance to open the shop.
+    getActiveCurseDefsByKind('parasite_score_drain').forEach(curseDef => {
+      const drained = Math.round(score * curseDef.effect.percent);
+      if (drained <= 0) return; // nothing to drain from a zero/negative score
+      score -= drained;
+      scoreEl.textContent = score;
+      addHistoryEntry('event', `${curseDef.name} saps ${drained} score.`, 'negative');
+    });
   }
 
   const tone = gained > 0 ? 'positive' : gained < 0 ? 'negative' : 'neutral';
@@ -1083,10 +1526,14 @@ function applyScoreGain(gained, popupText) {
   if (eliteOutcome) {
     renderSideStats();
     addHistoryEntry('event', `Elite result: ${eliteOutcome.resultText}`, eliteOutcome.won ? 'positive' : 'negative');
+    // NEW (item 2) — stash for the deferred dialog (resolveMatches()).
+    pendingEventResult = { title: eliteOutcome.name, text: eliteOutcome.resultText };
   }
   if (challengeOutcome && challengeOutcome.resultText) {
     renderSideStats();
     addHistoryEntry('event', `Challenge result: ${challengeOutcome.resultText}`, 'positive');
+    // NEW (item 2) — stash for the deferred dialog, same as above.
+    pendingEventResult = { title: challengeOutcome.name, text: challengeOutcome.resultText };
   }
   if (eliteOutcome || challengeOutcome) {
     updateObjectiveBanner();
@@ -1146,6 +1593,13 @@ function startGame() {
 function onCellClick(r, c) {
   if (busy) return;
 
+  // NEW — a target-requiring consumable is armed; this click IS its
+  // target, not a normal select/swap.
+  if (pendingConsumableEntry) {
+    handleConsumableTargetClick(r, c);
+    return;
+  }
+
   if (placementMode) {
     handlePlacementClick(r, c);
     return;
@@ -1177,6 +1631,7 @@ function onCellClick(r, c) {
   attemptSwap(sr, sc, r, c);
 }
 
+
 /**
  * Drag/swipe handler for a board cell. Fired by render.js when a
  * press-and-drag gesture on a gem cell resolves into a swap attempt.
@@ -1190,6 +1645,7 @@ function onCellClick(r, c) {
 function onCellDragSwap(r1, c1, r2, c2) {
   if (busy) return;
   if (placementMode) return;
+  if (pendingConsumableEntry) return; // NEW — a drag shouldn't count as this consumable's target click
 
   if (r2 < 0 || r2 >= SIZE || c2 < 0 || c2 >= SIZE) return;
   if (grid[r1][c1] === BLOCKED || grid[r2][c2] === BLOCKED) return;
@@ -1479,6 +1935,7 @@ function handleDischargerDouble(originRow, originCol) {
 function attemptSwap(r1, c1, r2, c2) {
   busy = true;
   selected = null;
+  pendingGoldenTicketTurn = true; // NEW — this IS a real player-initiated swap attempt
 
   // Cancel any pending hint countdown the moment the player commits
   // to a swap — it should never fire mid-animation/cascade. It's NOT
@@ -1573,13 +2030,27 @@ function attemptSwap(r1, c1, r2, c2) {
     const matched = findMatches(grid, isHyperstarCell);
 
     if (!hasAnyMatch(matched)) {
+      pendingGoldenTicketTurn = false; // NEW — invalid swap, this attempt never becomes a "completed turn"
       messageEl.textContent = MESSAGES.INVALID_SWAP;
       const revertPitch = computeCellPitch(boardEl);
       swap(grid, r1, c1, r2, c2);
       swap(specialGemState.grid, r1, c1, r2, c2);
       renderBoardWithInteractions();
       animateSwap(boardEl, r1, c1, r2, c2, revertPitch);
-      setTimeout(() => { busy = false; }, SWAP_ANIM_MS);
+      setTimeout(() => {
+        busy = false;
+        // NEW (item 1) — restart the hint countdown once input is
+        // live again. Previously the timer was cancelled at the very
+        // top of attemptSwap() but never rescheduled here, so ANY
+        // failed/invalid swap permanently killed the hint until the
+        // next real match succeeded — the player had to stay
+        // completely still (not even attempt a bad swap) for a hint
+        // to ever show up again. Now a failed attempt just restarts
+        // the clock fresh, exactly like a successful match does via
+        // checkEndState() — "regardless of any attempt to fail
+        // match," per the ask.
+        scheduleHintTimer();
+      }, SWAP_ANIM_MS);
       return;
     }
 
@@ -1618,12 +2089,38 @@ function resolveMatches(swapCells = null) {
   const matched = findMatches(grid, isHyperstarCell);
 
   if (!hasAnyMatch(matched)) {
+    // NEW — this whole swap's cascade just fully settled. If it was a
+    // real player swap (not a consumable action), that's exactly one
+    // Golden Ticket turn spent, win or lose.
+    if (pendingGoldenTicketTurn) {
+      pendingGoldenTicketTurn = false;
+      consumeGoldenTicketTurnIfActive();
+    }
+
     if (pendingLevelUp) {
       pendingLevelUp = false;
-      showLevelUpDialog(() => {
-        busy = false;
-        checkEndState();
-      });
+
+      // NEW (item 2) — if an Elite/Challenge resolved as part of
+      // getting to this level-up, show ITS result dialog FIRST
+      // (flavor text + outcome), and only open the "Level Cleared!"
+      // dialog once the player dismisses that. Keeps the two
+      // readable as separate beats ("this happened, AND ALSO you
+      // leveled up") instead of silently skipping straight past it.
+      const eventResult = pendingEventResult;
+      pendingEventResult = null;
+
+      const proceedToLevelUp = () => {
+        showLevelUpDialog(() => {
+          busy = false;
+          checkEndState();
+        });
+      };
+
+      if (eventResult) {
+        showEliteChallengeResultDialog(eventResult, proceedToLevelUp);
+      } else {
+        proceedToLevelUp();
+      }
       return;
     }
 
@@ -1846,11 +2343,9 @@ function proceedAfterBoonPick(def, onContinue) {
  */
 function openShopDialog(onContinue) {
   currentShopTier = shopTierForLevel(progressionState.level - 1);
-  // Snapshot score HERE, once, before any purchase can happen this
-  // visit — the shop's "Your score" subtitle never changes mid-visit, 
-  // even if the player buys something and the score drops.
   shopEntryScore = score;
   rollBoonShopOffer();
+  rollConsumableShopOffer(); // NEW
   shopContinuation = onContinue;
   renderShopDialog();
   shopDialogEl.classList.remove('hidden');
@@ -1903,6 +2398,37 @@ function renderShopDialog() {
     }
 
     shopChoicesEl.appendChild(card);
+  });
+
+  // NEW — consumable section, same shop visit. Always exactly 3
+  // DISTINCT types (rollConsumableShopOffer() guarantees this).
+  consumableShopChoicesEl.innerHTML = '';
+  consumableShopState.offer.forEach(type => {
+    const info = CONSUMABLE_INFO[type];
+    const price = calculateConsumablePrice(type, shopEntryScore);
+    const alreadyBought = isConsumablePurchasedThisVisit(type);
+    const beltFull = !hasBeltSpace();
+    const canAfford = score >= price;
+
+    const card = document.createElement('div');
+    card.className = 'shop-card consumable-shop-card';
+    if (alreadyBought) card.classList.add('shop-card--bought');
+    else if (!canAfford || beltFull) card.classList.add('shop-card--unaffordable');
+
+    card.innerHTML = `
+      <div class="boon-card-header">
+        <img class="boon-card-gem-icon" src="css/model/svg/consumables/${info.file}" alt="${info.name}">
+        <h3>${info.name}</h3>
+      </div>
+      <p>${info.description}</p>
+      <div class="shop-card-price">${alreadyBought ? 'Purchased' : beltFull ? 'Belt full' : `${price} pts`}</div>
+    `;
+
+    if (!alreadyBought && canAfford && !beltFull) {
+      card.addEventListener('click', () => buyConsumableFromShop(type, price));
+    }
+
+    consumableShopChoicesEl.appendChild(card);
   });
 }
 
@@ -1963,6 +2489,27 @@ function checkEndState() {
   }
 
   if (!hasPossibleMove(grid, isHyperstarCell, isSpecialSwapPair)) {
+    // NEW — Resurrection Cross: if the player holds one, it
+    // auto-consumes itself right here instead of letting the no-moves
+    // game-over fire, and reshuffles the board exactly like the
+    // existing PREVENT_DEADLOCK path already does below. Checked
+    // BEFORE that flag on purpose — per design, it's meant to save a
+    // run that would otherwise be stuck even with PREVENT_DEADLOCK off.
+    const resurrectionCross = findFirstConsumableOfType(CONSUMABLE_TYPE.RESURRECTION_CROSS);
+    if (resurrectionCross) {
+      removeConsumableFromInventory(resurrectionCross.pickId);
+      renderConsumableBelt();
+      messageEl.textContent = 'Your Resurrection Cross saves the run — reshuffling...';
+      setTimeout(() => {
+        rebuildGridRespectingBlocked(grid);
+        resetSpecialGems();
+        renderBoardWithInteractions();
+        busy = false;
+        scheduleHintTimer();
+      }, 400);
+      return;
+    }
+
     if (PREVENT_DEADLOCK) {
       messageEl.textContent = MESSAGES.RESHUFFLING;
       setTimeout(() => {

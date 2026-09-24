@@ -46,6 +46,23 @@
         </div>
       </div>
       <div id="gem-stats-list" class="gem-stats-list"></div>
+
+      <!-- NEW (item 6) — target score multiplier, read-only display,
+      right below the gem list. -->
+      <div class="side-stats-footer">
+        <div class="side-stat-row">
+          <span class="side-stat-label">Target Score Multiplier</span>
+          <span class="side-stat-value" id="target-multiplier">1.00x</span>
+        </div>
+      </div>
+
+      <!-- NEW (item 7) — active curses list. Design is a placeholder
+      for now (plain name + hover tooltip) — easy to move into its
+      own separate panel later once the real design is settled. -->
+      <div class="side-stats-curses">
+        <h3>Active Curses</h3>
+        <div id="curse-list" class="curse-list"></div>
+      </div>
     </div>
     <!-- NEW — right-side History panel, mirrors #side-stats on the
      left. Populated by main.js's renderHistoryPanel(), called every
@@ -104,7 +121,17 @@
         <div id="score-popup" class="score-popup"></div>
         <div id="board"></div>
       </div>
+      <!-- NEW — shown only while Golden Ticket's 2x is active. -->
+      <div id="golden-ticket-status" class="golden-ticket-status hidden"></div>
       <div id="message">select a gem, then an adjacent one to swap</div>
+      <!-- NEW — 3-slot consumable belt. Populated by main.js's
+      renderConsumableBelt(); each filled slot shows the item's SVG
+      icon and a hover tooltip explaining its effect. -->
+      <div id="consumable-belt" class="consumable-belt">
+        <div class="belt-slot" data-slot="0"></div>
+        <div class="belt-slot" data-slot="1"></div>
+        <div class="belt-slot" data-slot="2"></div>
+      </div>
       <!-- Placeholder text below — main.js overwrites this on load from
       resources/constant/text.js (BUTTONS.RESET). -->
       <button id="reset">start over</button>
@@ -135,6 +162,9 @@
           <h2 id="shop-title">The Shop</h2>
           <p id="shop-subtitle"></p>
           <div id="shop-choices" class="shop-choices"></div>
+          <!-- NEW — consumable section, same shop visit/dialog. -->
+          <h3 class="shop-section-heading">Consumables</h3>
+          <div id="consumable-shop-choices" class="shop-choices"></div>
           <button id="shop-leave">Leave</button>
         </div>
       </div>

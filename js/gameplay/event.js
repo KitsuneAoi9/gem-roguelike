@@ -43,6 +43,56 @@ function resolveMaybeFn(value, ...args) {
   return typeof value === 'function' ? value(...args) : value;
 }
 
+/**
+ * NEW — minimal HTML-attribute escaping for description text before
+ * it gets spliced into a data-tooltip="..." attribute below. None of
+ * the current boon/curse descriptions actually contain a literal
+ * quote/angle-bracket, but this costs nothing and stops a future
+ * description from silently breaking the markup.
+ *
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeHtmlAttr(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/**
+ * NEW — builds a small dashed-underline, tooltip-bearing, rarity-
+ * colored <span> for a boon or curse name, meant to be spliced
+ * directly into event flavor/result text wherever a SPECIFIC boon or
+ * curse is named (Gem Mole's trade, Lost Miner's absorb, Boon
+ * Hoarder's win/lose/decline, the side-stats Curses list, etc.).
+ *
+ * Lives here (not in main.js) because this file already owns
+ * building every other piece of this narrative text — main.js
+ * imports and reuses this SAME function for the two call sites it
+ * builds directly (Gem Mole/Lost Miner), instead of duplicating the
+ * markup logic a second time in two places.
+ *
+ * Pure string-building, no DOM access at all — description text is
+ * static game data (never user input), so this is safe to embed
+ * directly (through escapeHtmlAttr(), belt-and-suspenders).
+ *
+ * @param {object} def - a BOON_POOL entry OR a CURSE_POOL entry —
+ *   both shapes carry `.name`/`.description`, which is all this needs.
+ * @param {boolean} [isCurse=false] - true for a curse. Curses have no
+ *   `rarity` field of their own, so they always get the single
+ *   dedicated curse color instead of a rarity-based one.
+ * @returns {string} an HTML string. The CALLER is responsible for
+ *   rendering it via `.innerHTML` (never `.textContent`) wherever it
+ *   ends up — see main.js's showEventResult()/renderHistoryPanel()/
+ *   renderCursePanel().
+ */
+export function formatNamedEffectSpan(def, isCurse = false) {
+  const rarityClass = isCurse ? 'event-inline-name--curse' : `event-inline-name--${def.rarity}`;
+  return `<span class="event-inline-name ${rarityClass}" data-tooltip="${escapeHtmlAttr(def.description)}">${def.name}</span>`;
+}
+
 /** Every BOON_POOL entry of a given rarity safe to hand out as a random event reward. */
 function candidatePoolForRarity(rarity, bypassCap) {
   return BOON_POOL.filter(def => {
@@ -271,33 +321,42 @@ export function resolveLostMinerHelp(currentScore, def) {
  * curse in CURSE_POOL ("Weight of Greed" — +10% target score,
  * effective starting next level).
  *
- * @returns {{ grantedBoonName: string|null, curseName: string }} -
- *   grantedBoonName is null only in the edge case where literally no
+ * @returns {{ grantedBoonDef: object|null, curseDef: object }} -
+ *   grantedBoonDef is null only in the edge case where literally no
  *   boon is available to grant at all (every eligible boon already
  *   maxed out) — main.js should fall back to a generic "nothing of
  *   value" phrase in that case.
  */
 export function resolveLostMinerAbsorb() {
-  const offer = generateBoonOffer(1);
-  let grantedBoonName = null;
+const offer = generateBoonOffer(1);
+
+  // CHANGED — used to return just the boon's NAME string
+  // (grantedBoonName); now returns the full DEF, so main.js can build
+  // the rich styled span (formatNamedEffectSpan()) without having to
+  // reach back into BOON_POOL a second time to re-find it.
+  let grantedBoonDef = null;
   if (offer.length > 0) {
     const rewardDef = offer[0];
     const activeBoon = pickBoon(rewardDef.id);
     if (activeBoon) {
       activeBoon.appliedEffect = applyBoonEffect(rewardDef);
-      grantedBoonName = rewardDef.name;
+      grantedBoonDef = rewardDef;
     }
   }
 
   // Apply the curse regardless of whether a boon was actually
   // available — the miner's curse lands either way per the flavor
   // text ("the miner's curse has taken hold" is not conditioned on
-  // there being a boon to steal).
+  // there being a boon to steal). Still CURSE_POOL[0] specifically —
+  // "Weight of Greed" is kept first in the pool on purpose so this
+  // index keeps meaning the same thing even now that a second curse
+  // (Crystallized Parasite) exists in the pool too.
   const curseDef = CURSE_POOL[0];
   const activeCurse = grantCurse(curseDef.id);
   activeCurse.appliedEffect = applyBoonEffect(curseDef);
 
-  return { grantedBoonName, curseName: curseDef.name };
+  // CHANGED — returns the curse's full def too, same reasoning.
+  return { grantedBoonDef, curseDef };
 }
 
 // ============================================================
@@ -404,7 +463,11 @@ function applyEliteOutcomeEffect(effectSpec, currentScore) {
         const activeBoon = effectSpec.bypassCap ? grantBoonBypassingCap(rewardDef.id) : pickBoon(rewardDef.id);
         if (activeBoon) {
           activeBoon.appliedEffect = applyBoonEffect(rewardDef);
-          grantedNames.push(rewardDef.name);
+          // CHANGED — push the rich, rarity-colored/tooltipped span
+          // instead of a bare name string. Whatever winText/loseText
+          // interpolates this into (Boon Hoarder's flavor text) will
+          // render it styled automatically once shown via innerHTML.
+          grantedNames.push(formatNamedEffectSpan(rewardDef));
         }
       }
       return { scoreDelta: 0, grantedNames, removedNames: [] };
@@ -416,7 +479,8 @@ function applyEliteOutcomeEffect(effectSpec, currentScore) {
         if (boonState.activeBoons.length === 0) break;
         const victim = boonState.activeBoons[Math.floor(Math.random() * boonState.activeBoons.length)];
         const victimDef = BOON_POOL.find(b => b.id === victim.id);
-        if (victimDef) removedNames.push(victimDef.name);
+        // CHANGED — same styled-span treatment as above.
+        if (victimDef) removedNames.push(formatNamedEffectSpan(victimDef));
         reverseBoonEffect(victim);
         removeActiveBoon(victim.pickId);
       }
@@ -424,19 +488,35 @@ function applyEliteOutcomeEffect(effectSpec, currentScore) {
     }
 
     case 'target_percent': {
-      // PERMANENT — stacks into the same multiplicative
-      // targetScoreMultiplier the global-score boons use, so it
-      // affects every future level's target, not just this one.
       boonEffectState.targetScoreMultiplier *= (1 + effectSpec.percent);
       progressionState.scoreTarget = calculateScoreTarget(progressionState.level);
       return { scoreDelta: 0, grantedNames: [], removedNames: [] };
     }
 
     case 'score_percent': {
-      // One-time swing against currentScore — NOT stored anywhere;
-      // the caller applies this delta to the live score variable.
       const amount = Math.round(currentScore * effectSpec.percent);
       return { scoreDelta: amount, grantedNames: [], removedNames: [] };
+    }
+
+    // NEW — grants a specific curse by id. Currently only used by
+    // Gem Cultivator's onLose (implants the Crystallized Parasite instead of
+    // directly docking score). Mirrors the exact two-step
+    // grantCurse()/applyBoonEffect() pattern every other curse/boon
+    // grant in the codebase already follows.
+    //
+    // scoreDelta is always 0 here — this outcome kind never touches
+    // score directly. Whatever the granted curse actually DOES (a
+    // recurring drain, a permanent target bump, whatever a future
+    // curse might do) is entirely up to that curse's own effect shape
+    // and whatever code later checks for it — see main.js's
+    // applyScoreGain() for the Crystallized Parasite's per-level drain.
+    case 'grant_curse': {
+      const curseDef = CURSE_POOL.find(c => c.id === effectSpec.curseId);
+      if (curseDef) {
+        const activeCurse = grantCurse(curseDef.id);
+        activeCurse.appliedEffect = applyBoonEffect(curseDef);
+      }
+      return { scoreDelta: 0, grantedNames: [], removedNames: [] };
     }
 
     default:
@@ -582,8 +662,15 @@ export function resolveEliteOutcome(currentScore) {
     ? resolveMaybeFn(def.winText, grantedNames)
     : resolveMaybeFn(def.loseText, removedNames);
 
+  // NEW — hand the def's own name back too, so main.js can title the
+  // new result dialog (item 2) without re-looking it up itself.
+  // Grabbed BEFORE clearEliteState() below — that call only resets
+  // activeEventState, `def` itself stays perfectly valid either way,
+  // but reading it here keeps the return shape self-contained.
+  const name = def.name;
+
   clearEliteState();
-  return { won, resultText, scoreDelta };
+  return { won, resultText, scoreDelta, name };
 }
 
 // ============================================================
@@ -649,8 +736,12 @@ export function resolveChallengeOutcome() {
     }
   }
 
+  // NEW — same reasoning as resolveEliteOutcome() above: hand back
+  // the def's name for the new result dialog to use as its title.
+  const name = def.name;
+
   clearChallengeState();
-  return { succeeded, resultText };
+  return { succeeded, resultText, name };
 }
 
 // ============================================================
