@@ -145,3 +145,32 @@ Patch Note 2026/09/23 v0.2.1.1
 3. Fixed the issue where the Hyperstar targets another Hyperstar if it is created from the same gem that was swapped with the Hyperstar 
 
 4. Fixed the tooltips
+
+========================================================================================================
+Patch Note 2026/09/24 v0.2.2.0
+
+1. Fixed issues where the game crashes (showChallengeDialog is not defined)
+
+2. Fixed the hint countdown. Now, it should start the countdown once the scoring is done.
+
+3. Fixed the result screen not showing up after the elite/challenge fight.
+
+3. Added tooltips to the boon/curse on the event result screen. 
+
+4. Added color code the boon/curse on the event result screen.
+
+5. Changed Gem Cultivator lose rewards from deducting your score to him implanting a Crystallized Parasite (Curse) which will sap 15% of your score at the end of every level.
+
+6. Added target score multiplier to the Stats side-screen.
+
+7. Added Active Curse side screen below the Stats.
+
+8. Implemented a new feature - Consumable Items
+-> Player can hold up to 3 Consumable Items at any time.
+-> Player cannot discard the Consumable Items.
+-> Player can buy Consumable Items from Shop. (In the future they can be obtained from events)
+-> Shop will always 3 different Consumable Items.
+-> Consumable Item of the same type cannot be stacked.
+-> Hovering over the consumable items on the belt will display the tooltips of its effect
+
+9. Redesigned the event dialogue. (Text align and Choices text box)

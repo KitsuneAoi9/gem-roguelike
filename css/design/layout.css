@@ -11,6 +11,9 @@
   --paper: #ece4d8;
   --paper-dim: #a89d8f;
   --gold: #e0b34a;
+    /* NEW — dedicated color for curse names, since curses have no
+     rarity of their own to borrow a color from (see below). */
+  --curse-color: #c0392b;
 
   /* NEW — one color per boon rarity, used for card border color
      (boon dialog + shop, both dialog.css) and the rarity text badge
@@ -274,6 +277,107 @@ button#reset:hover {
   color: var(--gold);
   font-variant-numeric: tabular-nums;
 }
+
+/* ============================================================
+   SIDE STATS PANEL — FOOTER (target multiplier) + CURSES SECTION
+   Both are new bottom sections of the SAME #side-stats panel (item 6
+   and item 7) — border-top dividers, same visual language as
+   .side-stats-global's existing border-bottom divider up top.
+   ============================================================ */
+.side-stats-footer {
+  border-top: 1px solid var(--vein);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.side-stats-curses {
+  border-top: 1px solid var(--vein);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.side-stats-curses h3 {
+  margin: 0 0 8px;
+  font-family: 'Georgia', 'Iowan Old Style', serif;
+  font-weight: 400;
+  font-size: 0.85rem;
+  color: var(--paper);
+  text-align: center;
+}
+
+.curse-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.curse-entry {
+  font-size: 0.78rem;
+}
+
+/* Shown by main.js's renderCursePanel() instead of an empty list —
+   an empty section with no explanatory text reads like a rendering
+   bug, not "you currently have zero curses." */
+.curse-empty {
+  font-size: 0.72rem;
+  color: var(--paper-dim);
+  text-align: center;
+  font-style: italic;
+}
+
+/* ============================================================
+   INLINE NAMED-EFFECT SPANS
+   The dashed-underline / hover-tooltip / rarity-colored treatment
+   for a SPECIFIC boon or curse name mentioned inside flavor/result
+   text (Gem Mole's trade, Lost Miner's absorb, Boon Hoarder's win/
+   lose/decline, the new Curses list, etc.) — built by
+   gameplay/event.js's formatNamedEffectSpan() and rendered via
+   innerHTML wherever it ends up (showEventResult(), History panel,
+   the new curse list).
+
+   Tooltip width is capped at 160px rather than the wider 220px used
+   elsewhere — this same markup can land inside the narrow #side-stats
+   panel (200px wide, ~168px content box after padding) or the
+   240px-wide History panel, and a wider tooltip would get clipped by
+   THEIR overflow-y:auto the exact same way the side-stat tooltip was
+   before that fix. 160px is the one width that's safe everywhere
+   this can appear, even though it looks a little small/tall inside
+   the much roomier event dialog.
+   ============================================================ */
+.event-inline-name {
+  border-bottom: 1px dashed currentColor;
+  cursor: help;
+  position: relative; /* anchor for the ::after tooltip box below */
+}
+
+.event-inline-name:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  top: 125%;
+  width: 160px;
+  background: var(--rock-deep);
+  border: 1px solid var(--vein);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--paper);
+  white-space: normal;
+  text-align: left; /* keep tooltip text left-aligned even inside a centered ancestor */
+  z-index: 30;       /* above dialogs' own content too, not just the side panels */
+  box-shadow: 0 10px 24px -10px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+
+/* Reuses the SAME rarity colors the boon/shop cards already use. */
+.event-inline-name--common     { color: var(--rarity-common); }
+.event-inline-name--uncommon   { color: var(--rarity-uncommon); }
+.event-inline-name--rare       { color: var(--rarity-rare); }
+.event-inline-name--epic       { color: var(--rarity-epic); }
+.event-inline-name--legendary  { color: var(--rarity-legendary); }
+.event-inline-name--curse      { color: var(--curse-color); }
+
 /* ============================================================
    INFO TOOLTIP (side-stats labels)
    Pure-CSS hover tooltip: dashed underline signals "hover me", the
@@ -531,6 +635,95 @@ button#reset:hover {
   border-radius: 4px;
   font-family: 'Helvetica Neue', Arial, sans-serif;
   font-size: 0.8rem;
+  color: var(--gold);
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+/* ============================================================
+   BOARD + CONSUMABLE BELT
+   Side-by-side row. The 30px top margin that used to live on
+   .board-wrap alone now lives on this wrapper instead, so both
+   children start at the same vertical position.
+   ============================================================ */
+.consumable-belt {
+  display: flex;
+  flex-direction: row; /* CHANGED — was column (beside the board); now a horizontal row centered below the message line */
+  gap: 10px;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.belt-slot {
+  width: 69px;
+  height: 69px;
+  border-radius: 4px;
+  background: var(--rock-deep);
+  border: 2px solid var(--vein);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative; /* anchor for the hover tooltip below */
+}
+
+/* A held item gets a gold border so an empty vs. filled slot reads
+   at a glance, same visual language .cell--tile already uses. */
+.belt-slot--filled {
+  border-color: var(--gold);
+}
+
+.belt-slot--clickable {
+  cursor: pointer;
+}
+
+.belt-slot-icon {
+  width: 78%;
+  height: 78%;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+
+/* Tooltip opens to the RIGHT of the slot (not below, unlike the
+   side-stats tooltips) — the belt has no scrolling ancestor to clip
+   it, so there's no need for the narrow-width compromise those
+   needed (Part 6 §1 / Part 7 §4). */
+.belt-slot[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%); /* CHANGED — was left:0/top:0-anchored-right; now centered below the slot */
+  margin-top: 8px;
+  width: 220px; /* CHANGED — no longer needs the narrower width; nothing clips it here */
+  background: var(--rock-deep);
+  border: 1px solid var(--vein);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--paper);
+  text-align: left;
+  white-space: normal;
+  z-index: 30;
+  box-shadow: 0 10px 24px -10px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+
+/* ============================================================
+   GOLDEN TICKET STATUS
+   Shown only while its 2x-score buff is active — same "small gold
+   banner" visual language as .objective-banner, but independent of
+   it (both can theoretically be visible at once).
+   ============================================================ */
+.golden-ticket-status {
+  margin: 4px 0 0;
+  padding: 6px 14px;
+  background: var(--rock);
+  border: 1px solid var(--gold);
+  border-radius: 4px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.76rem;
   color: var(--gold);
   text-align: center;
   letter-spacing: 0.02em;

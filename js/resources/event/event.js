@@ -205,8 +205,12 @@ export const ELITE_POOL = [
     // One-time score swings, NOT permanent — computed off the LIVE
     // score at the moment the level actually clears (per design).
     onWin: { kind: 'score_percent', percent: 0.50 },
-    onLose: { kind: 'score_percent', percent: -0.50 },
-
+    // CHANGED — was { kind: 'score_percent', percent: -0.50 }, an
+    // immediate one-time score deduction. Losing now instead implants
+    // the Crystallized Parasite (resources/curse/curse.js) — a recurring
+    // 15%-of-score drain triggered at the end of every level from
+    // here on, rather than one lump-sum hit right now.
+    onLose: { kind: 'grant_curse', curseId: 'crystallized_parasite' },
     // "Slip away" is a 50/50 coinflip — success costs nothing,
     // failure costs 25% of current score.
     decline: {
@@ -217,7 +221,7 @@ export const ELITE_POOL = [
     },
 
     winText: "You successfully harness the power of the gemstone before reaching your target. The Gem Cultivator's expression darkens as his technique collapses.\n\n\u201cImpossible... You have cultivated it faster than I could.\u201d\n\nYou take advantage of his hesitation and claim 50% of your current score as your reward.",
-    loseText: "The Gem Cultivator's technique overwhelms you. Before you can complete the challenge, the opportunity slips away.\n\nHe smiles as the gemstone's energy fades.\n\n\u201cWhat's yours is mine.\u201d\n\n50% of your current score is taken by the Gem Cultivator.",
+     loseText: "The Gem Cultivator's technique overwhelms you. Before you can complete the challenge, the opportunity slips away.\n\nHe smiles as the gemstone's energy fades. \u201cYour talent may be lacking, but your body will more than make up for it.\u201d\n\nA strange parasite emerges from his hand and burrows into your body before you can react. A parasite curse has been implanted within you.",
   },
 ];
 

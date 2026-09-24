@@ -48,4 +48,4 @@ export const MESSAGES = {
 };
 
 // Version
-export const GAME_VERSION = "v0.2.1.1";
+export const GAME_VERSION = "v0.2.2.0";

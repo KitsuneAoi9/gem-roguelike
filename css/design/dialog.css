@@ -318,6 +318,11 @@
      text as actual visual gaps instead of collapsing them into one
      run-on line (default HTML whitespace handling). */
   white-space: pre-line;
+    /* NEW — was inheriting .dialog-box's centered text-align, which
+     read awkwardly for multi-paragraph flavor/result text. Doesn't
+     touch the title (still centered) or the choice-button row (still
+     centered via .event-choices' justify-content). */
+  text-align: left;
 }
 
 .event-choices {
@@ -326,6 +331,22 @@
   gap: 10px;
   margin-top: 20px;
   justify-content: center;
+}
+
+/* NEW — numbered, single-column list variant, used ONLY by Encounter
+   choice screens (Gem Mole, Fortune's Folly, Lost Miner). Elite,
+   Challenge, and the generic single-button Continue screen all stay
+   on the default .event-choices (centered row-wrap) — see main.js's
+   showEventResult(), which always resets back to that default. */
+.event-choices--list {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.event-choices--list button {
+  flex: none;
+  width: 100%;
+  text-align: left;
 }
 
 .event-choices button {
@@ -358,4 +379,20 @@
 @keyframes event-dialog-pop-in {
   from { transform: scale(0.9) translateY(10px); opacity: 0; }
   to   { transform: scale(1) translateY(0); opacity: 1; }
+}
+
+/* NEW — consumable section heading inside the shop dialog. */
+.shop-section-heading {
+  margin: 18px 0 0;
+  font-family: 'Georgia', 'Iowan Old Style', serif;
+  font-weight: 400;
+  font-size: 0.9rem;
+  color: var(--paper);
+  text-align: center;
+}
+
+/* Consumables have no rarity, so they get a flat gold border instead
+   of a rarity-colored one — distinct from a boon card at a glance. */
+.consumable-shop-card {
+  border-color: var(--gold);
 }
