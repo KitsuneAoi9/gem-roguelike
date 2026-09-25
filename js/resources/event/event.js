@@ -221,7 +221,7 @@ export const ELITE_POOL = [
     },
 
     winText: "You successfully harness the power of the gemstone before reaching your target. The Gem Cultivator's expression darkens as his technique collapses.\n\n\u201cImpossible... You have cultivated it faster than I could.\u201d\n\nYou take advantage of his hesitation and claim 50% of your current score as your reward.",
-     loseText: "The Gem Cultivator's technique overwhelms you. Before you can complete the challenge, the opportunity slips away.\n\nHe smiles as the gemstone's energy fades. \u201cYour talent may be lacking, but your body will more than make up for it.\u201d\n\nA strange parasite emerges from his hand and burrows into your body before you can react. A parasite curse has been implanted within you.",
+    loseText: "The Gem Cultivator's technique overwhelms you. Before you can complete the challenge, the opportunity slips away.\n\nHe smiles as the gemstone's energy fades. \u201cYour talent may be lacking, but your body will more than make up for it.\u201d\n\nA strange parasite emerges from his hand and burrows into your body before you can react. A parasite has been implanted within you.",
   },
 ];
 

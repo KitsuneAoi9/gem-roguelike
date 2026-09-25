@@ -1,45 +1,78 @@
 
 
 9. You gain gold by buying using score (score scaling) or sacrifice a boon (set amount of gold, gold gained will be based on rarirty).
-10. Next step is shop feature. Show boons as item instead of artifact, relics and fossil. Only about 4 boons, score price will scale with levels.
-11. Event feature > challenge > double or nothing. Chance based appearance. Only start after level 4.
 12. Implement diagonal movement  (only in the shop or event, and it costs all of your score).
 13. Curse that spawns dead block (1 deadblocks, immediately) showing up or new gems (like only 5% for appearance) to mess with the board. dead block can only be remove by moving it to the bottom.
-14. Add a version
-15. Gamble boon, double or nothing. Either repeatedly or one chance
+
 
 
 1. Star gem can destroy another star gem if they both come from the same gem
 
 
-2. Getting special gems
+---------------------------------------
+Here is my road map:
+
+Phase 1 v0.1.x.x
+-> Implement the 8x8 board. (Completed)
+-> Implement the matching. (Completed)
+-> Implement special gems. (Completed)
+-> Implement score formula. (Completed)
+-> Implement cascade combo logic. (Completed)
+-> Implement deadlock logic. (Completed)
+-> Implement deadlock prevention setting and logic. (Completed)
+-> Implement move limits setting and logic. (Completed)
+-> Implement score target calculation & level up logic. (Completed)
+-> Implement base score, base multiplier, and match bonus for each individual gem. (Completed)
+-> Implement global bonus score, global multiplier. (Completed)
+-> Implement the display for score, level and target level. (Completed)
+-> Implement basic animations, hint, click and drag and some quality of life (Completed)
+-> Build the overall structure for gameplay, objects, constant definition. (Completed)
+
+Phase 2 v0.2.x.x (Currently in progress)
+-> Implement boons (75% done)
+-> Implement shop (85% done, Remaining task: Implement customer service feature)
+-> Implement events (80% done)
+-> Implement curse (75% done)
+-> Implement the first batch of consumable (Completed).
+-> Implement Stats side screen to view the current stat and active curse. (Complete)
+-> Finalize the naming and the description of boons, curse and consumable. (In progress)
+-> Implement some quality of life (In tandem with above task)
+-> Test play and fix issues/bugs or balancing. (In tandem with above task)
+
+Phase 3A starting v0.3.0.x
+-> Revise the story board (Event stories, overall stories, concept theme).
+-> Add more consumable items.
+-> Bug Fixing
+-> Clean up the code.
+
+Phase 3B starting from v0.3.3.x
+-> Move to new engine (Godot)
+
+Phase 3C starting from v0.3.6.x
+-> Add player profiles.
+-> Add Save/Load function.
+
+Phase 4 v0.4.x.x (Still planning)
+-> Implement Meta-progress
+-> Implement animations
+-> Implement sound
+-> Implement VFX
+
+
+ToDo
+1. Fix Dice 
+
+2. Ramp up difficulty for The silent vein. It will now last multiple levels.
+
+3. Getting special gems
 OO
 OO
 OO
 
-3. Star exploded by another special gems, doesn't do anything
+4. Star exploded by another special gems, doesn't do anything. 
 
+5. Change the global score formula, it will now add the bonus score then apply multiplier.
 
+6. Added boon
 
-
-
-Thanks, next I need help fixing the following
-
-For the hint, If i click around, the hint won't show up. The user needs to stay still for hint to start the count down. Always start/restart the count down after successful match and the cascade is done, regardless any attempt to fail match.
-After the elite/challenge, show the result dialog screen with flavor text and the rewards/ penalty (same as the on pops up in the history).
-For the even dialog, I want to enter new line in between , how do I do that? Also, can you make then align left, for the text?
-For the boon rewards, can you make them dashed underlined and show tooltips when hover over them?. Also color code the boon name based on the rarity as well (The color is the same color we use for the boon card order). Same applies for the curse as well
-I want to change Gem Cultivator fight but lose rewards from deducting your score to him implanting a parasite curse which will sap 15% of your score at the end of the level, before entering the shop. here is the lose text which i already updated.
- loseText: "The Gem Cultivator's technique overwhelms you. Before you can complete the challenge, the opportunity slips away.He smiles as the gemstone's energy fades. \"Your talent may be lacking, but your body will more than make up for it.\"\n\n\u201cA strange parasite emerges from his hand and burrows into your body before you can react.A parasite curse has been implanted within you.",
-On the Gem Stats screen, put another divider below the Gems, add display target score multiplier.
-Below the Gem Stats screen, add a Curse screen, that show a list of active curse. I leave the design to you for now. Will think of the details afterwards.
-
-
-TO fixing
-
-1 For the belt, put it right below the the text line that is below the board..
-
-2 As for the choice for the encounter event, line them in a column and put a number like this
-1. option 1 text here
-2. option 2 text here
-3. option 3 text here
+7. Added Removal service to the shop
