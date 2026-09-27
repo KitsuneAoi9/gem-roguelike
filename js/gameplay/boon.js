@@ -1,38 +1,29 @@
 // ============================================================
 // BOON.JS — offer generation + pick tracking.
 //
-// Reads/writes boonState (resources/boon/) but owns none of the
-// state itself. Offer generation is rarity-weighted (BOON_RARITY_WEIGHTS)
-// and filters out gem-scoped boons for locked gems (gemUnlockState).
-//
-// NEW THIS ROUND — every activeBoons entry now carries a unique
-// `pickId` (so ONE specific pick, out of possibly several copies of
-// the same boon, can be targeted for removal later) and an
-// `appliedEffect` slot (filled in by the caller right after
-// applyBoonEffect() runs — see boon_effects.js). This is what makes
-// the event system's "trade away a boon" / "lose a random boon"
-// possible: reverseBoonEffect() + removeActiveBoon() together can
-// undo ONE exact pick without touching anything else the player is
-// holding.
+// NEW THIS ROUND — generateBoonOffer()/generateEqualWeightBoonOffer()
+// now also exclude SHOP_ONLY_BOON_IDS (Booner, VIP Membership Card),
+// alongside the existing 'perpetual_boon' and EVENT_ONLY_BOON_IDS
+// exclusions. Shop-only boons are ONLY ever granted directly by
+// gameplay/customer_service.js's "Limited Edition Boons Sale" service.
 // ============================================================
 
-import { BOON_POOL, BOON_RARITY_WEIGHTS, BOON_RARITY } from '../resources/boon/boon.js';
+import { BOON_POOL, BOON_RARITY_WEIGHTS, BOON_RARITY, EVENT_ONLY_BOON_IDS, SHOP_ONLY_BOON_IDS } from '../resources/boon/boon.js';
 import { boonState } from '../resources/boon/boon_state.js';
 import { LEGENDARY_UNLOCK_LEVEL } from '../resources/constant/constants.js';
 import { gemUnlockState } from '../resources/gem/gem_unlock_state.js';
 import { progressionState } from '../resources/progression/progression.js';
 
-// NEW — module-level counter for `pickId`. Reset alongside
+// Module-level counter for `pickId`. Reset alongside
 // boonState.activeBoons in resetBoons().
 let nextPickId = 1;
 
 function timesPicked(boonId) {
-  // NEW — an event-granted boon that bypasses maxOccurrences
+  // An event-granted boon that bypasses maxOccurrences
   // (exemptFromOccurrenceCap: true — currently only Elite's win
   // reward) must NOT count against this boon's own cap for any
-  // FUTURE normal pick — "doesn't count towards occurrences" per
-  // design. Filtered out here so every caller of timesPicked() gets
-  // this for free.
+  // FUTURE normal pick — filtered out here so every caller of
+  // timesPicked() gets this for free.
   return boonState.activeBoons.filter(b => b.id === boonId && !b.exemptFromOccurrenceCap).length;
 }
 
@@ -40,19 +31,40 @@ function timesPicked(boonId) {
  * Respects the pick cap, gem-unlock status, AND the Legendary level
  * gate.
  *
- * EXPORTED THIS ROUND — the event system (gameplay/event.js) reuses
- * this exact gate for two things: finding a same-rarity replacement
- * for an Encounter trade, and checking whether ANY Legendary boon is
- * currently offerable before letting a Challenge event trigger at
- * all. Keeping this the single source of truth for "can this boon be
- * offered right now" avoids a second, parallel gate drifting out of
- * sync with this one somewhere in event.js.
+ * The event system (gameplay/event.js) reuses this exact gate for two
+ * things: finding a same-rarity replacement for an Encounter trade,
+ * and checking whether ANY Legendary boon is currently offerable
+ * before letting a Challenge event trigger at all.
  */
 export function isBoonAvailable(def) {
   if (def.effect?.gem && !gemUnlockState.unlocked[def.effect.gem]) return false;
   if (def.rarity === BOON_RARITY.LEGENDARY && progressionState.level < LEGENDARY_UNLOCK_LEVEL) return false;
   if (def.maxOccurrences == null) return true;
   return timesPicked(def.id) < def.maxOccurrences;
+}
+
+/**
+ * True if the player currently holds AT LEAST ONE pick of the given
+ * boon id, regardless of how many copies or which pickId.
+ *
+ * @param {string} boonId
+ * @returns {boolean}
+ */
+export function isBoonActive(boonId) {
+  return boonState.activeBoons.some(b => b.id === boonId);
+}
+
+/**
+ * How many copies of a given boon id the player currently holds.
+ * Same underlying data as isBoonActive(), just a count instead of a
+ * boolean — used wherever a boon's effect scales per copy (Booner's
+ * stacking bonus-offer chance, Perpetual Boon's per-level %, etc.).
+ *
+ * @param {string} boonId
+ * @returns {number}
+ */
+export function countActiveBoon(boonId) {
+  return boonState.activeBoons.filter(b => b.id === boonId).length;
 }
 
 function shuffle(array) {
@@ -72,18 +84,31 @@ function rollRarity() {
     cumulative += weight;
     if (roll < cumulative) return rarity;
   }
-  return 'common'; // fallback if weights don't sum to exactly 1
+  return 'common';
+}
+
+/** Every id that must never appear through the normal offer pools — shared by both generators below. */
+function isExcludedFromNormalOffers(def) {
+  return def.id === 'perpetual_boon' || EVENT_ONLY_BOON_IDS.has(def.id) || SHOP_ONLY_BOON_IDS.has(def.id);
 }
 
 /**
  * Generates a fresh set of boon choices, rarity-weighted per
  * BOON_RARITY_WEIGHTS rather than a flat uniform draw.
  *
+ * NEW — Perpetual Boon is excluded from the normal candidate pool
+ * entirely (see the `available` filter below), and only ever gets
+ * added at the very end, as a last-resort filler, if the pool
+ * genuinely couldn't fill every slot with a real, distinct boon.
+ *
+ * CHANGED THIS ROUND — the `available` filter now also excludes
+ * EVENT_ONLY_BOON_IDS, alongside the existing 'perpetual_boon' exclusion.
+ *
  * @param {number} [count=3]
  * @returns {object[]}
  */
 export function generateBoonOffer(count = 3) {
-  const available = BOON_POOL.filter(isBoonAvailable);
+  const available = BOON_POOL.filter(def => !isExcludedFromNormalOffers(def)).filter(isBoonAvailable);
   const offer = [];
   const usedIds = new Set();
 
@@ -92,7 +117,7 @@ export function generateBoonOffer(count = 3) {
     attempts++;
     const rarity = rollRarity();
     const candidates = available.filter(def => def.rarity === rarity && !usedIds.has(def.id));
-    if (candidates.length === 0) continue; // unlucky/empty tier — reroll
+    if (candidates.length === 0) continue;
     const pick = candidates[Math.floor(Math.random() * candidates.length)];
     offer.push(pick);
     usedIds.add(pick.id);
@@ -106,15 +131,31 @@ export function generateBoonOffer(count = 3) {
     }
   }
 
+  // NEW — Perpetual Boon fallback: if even after the two passes above
+  // there still aren't enough DISTINCT real boons left to fill every
+  // slot (every other offerable boon is already exhausted/maxed),
+  // pad whatever's left with Perpetual Boon. Its own maxOccurrences
+  // is Unlimited, so this can never itself run dry — it's the
+  // guaranteed last resort the level-up screen always has something
+  // to show.
+  if (offer.length < count) {
+    const perpetualDef = BOON_POOL.find(def => def.id === 'perpetual_boon');
+    while (offer.length < count && perpetualDef) {
+      offer.push(perpetualDef);
+    }
+  }
+
   return offer;
 }
 
 /**
- * Equal-weight offer generation — see prior handoffs for the full
- * doc comment. Unchanged this round.
+ * Equal-weight offer generation for the shop.
  */
 export function generateEqualWeightBoonOffer(count = 5, extraFilter = () => true) {
-  const available = BOON_POOL.filter(isBoonAvailable).filter(extraFilter);
+  const available = BOON_POOL
+    .filter(def => !isExcludedFromNormalOffers(def))
+    .filter(isBoonAvailable)
+    .filter(extraFilter);
   return shuffle(available).slice(0, count);
 }
 
@@ -124,16 +165,6 @@ export function generateEqualWeightBoonOffer(count = 5, extraFilter = () => true
  * grantBoonBypassingCap() (event rewards that ignore maxOccurrences
  * entirely). Pulled into one place so the SHAPE of an activeBoon
  * entry can never drift between the two call paths.
- *
- * `appliedEffect` starts null — the caller (main.js, or
- * gameplay/event.js) is responsible for setting
- * `activeBoon.appliedEffect = applyBoonEffect(def)` immediately after
- * calling pickBoon()/grantBoonBypassingCap(). It can't be filled in
- * HERE because applyBoonEffect() needs the activeBoon to already
- * exist first (frenzy's random-target selection, for instance, has
- * no dependency on the activeBoon record, but keeping the two calls
- * as a fixed two-step pattern everywhere is what makes the whole
- * reversal system reliable — see boon_effects.js's doc comment).
  *
  * @param {object} def - a BOON_POOL entry.
  * @param {object} data - free-form extra data for this pick (unused
@@ -145,12 +176,12 @@ export function generateEqualWeightBoonOffer(count = 5, extraFilter = () => true
  */
 function createActiveBoonEntry(def, data, exempt) {
   const activeBoon = {
-    pickId: nextPickId++,            // NEW — unique per-pick instance id
+    pickId: nextPickId++,
     id: def.id,
     pickedAtLevel: progressionState.level,
     data,
-    exemptFromOccurrenceCap: exempt, // NEW
-    appliedEffect: null,             // NEW — the caller fills this in right after applyBoonEffect()
+    exemptFromOccurrenceCap: exempt,
+    appliedEffect: null,
   };
   boonState.activeBoons.push(activeBoon);
   return activeBoon;
@@ -159,8 +190,7 @@ function createActiveBoonEntry(def, data, exempt) {
 /**
  * Records the player's pick in boonState. Does NOT apply the boon's
  * effect — see js/gameplay/boon_effects.js's applyBoonEffect(), called
- * separately by main.js right after this (and now expected to have
- * its return value attached: `activeBoon.appliedEffect = applyBoonEffect(def)`).
+ * separately by main.js right after this.
  *
  * @param {string} boonId
  * @param {object} [data={}]
@@ -173,25 +203,13 @@ export function pickBoon(boonId, data = {}) {
 }
 
 /**
- * NEW — grants a boon exactly like pickBoon(), but skips
- * isBoonAvailable() ENTIRELY (no maxOccurrences check, no gem-unlock
- * check, no Legendary level gate), and the resulting entry is flagged
- * `exemptFromOccurrenceCap: true`, so it also never counts against
- * that SAME boon's cap for any future normal pick.
- *
- * Currently used for exactly one thing: Gem Elitist's win reward (2
- * random Epic boons, "not affected by boon occurrences nor does it
- * count towards occurrences" per design) — see
- * gameplay/event.js's resolveEliteOutcome(). Gem-unlock filtering is
- * still done by the CALLER (event.js only ever passes in ids from a
- * pool already filtered to unlocked gems) — this function trusts the
- * id it's given completely, on purpose, since "bypass everything" is
- * exactly what it's for.
+ * Grants a boon exactly like pickBoon(), but skips isBoonAvailable()
+ * ENTIRELY, and the resulting entry is flagged
+ * `exemptFromOccurrenceCap: true`.
  *
  * @param {string} boonId
  * @param {object} [data={}]
- * @returns {object|null} the new activeBoon entry, or null if boonId
- *   doesn't match any BOON_POOL entry at all.
+ * @returns {object|null}
  */
 export function grantBoonBypassingCap(boonId, data = {}) {
   const def = BOON_POOL.find(b => b.id === boonId);
@@ -200,16 +218,13 @@ export function grantBoonBypassingCap(boonId, data = {}) {
 }
 
 /**
- * NEW — removes one SPECIFIC pick from boonState.activeBoons by its
- * unique pickId (NOT by boon id — the player could hold several
- * copies of the same boon). Does NOT undo the pick's stat effects;
- * the caller must call boon_effects.js's reverseBoonEffect() on the
- * SAME entry FIRST (before removal — reversal reads the entry's
- * stored appliedEffect, which this function throws away).
+ * Removes one SPECIFIC pick from boonState.activeBoons by its unique
+ * pickId (NOT by boon id). Does NOT undo the pick's stat effects; the
+ * caller must call boon_effects.js's reverseBoonEffect() on the SAME
+ * entry FIRST.
  *
  * @param {number} pickId
- * @returns {object|null} the removed entry, or null if no entry with
- *   that pickId was found.
+ * @returns {object|null}
  */
 export function removeActiveBoon(pickId) {
   const index = boonState.activeBoons.findIndex(b => b.pickId === pickId);
@@ -220,5 +235,5 @@ export function removeActiveBoon(pickId) {
 
 export function resetBoons() {
   boonState.activeBoons.length = 0;
-  nextPickId = 1; // NEW — pickIds are per-run, same as everything else this resets
+  nextPickId = 1;
 }

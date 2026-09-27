@@ -5,7 +5,7 @@
 
 export const eventState = {
   chanceIndex: 0,
-  seenEventIds: [], // shared across all 3 types — see gameplay/event.js's markEventSeen()
+  seenEventIds: [], // shared across all 3 types
 };
 
 // The ONE mid-level modifier currently in effect, if any.
@@ -20,28 +20,30 @@ export const activeEventState = {
   eliteStartedAt: null,
   eliteDurationMs: null,
 
-  // NEW — gem_cap / gem_subscore_race win-conditions: which gem this
-  // fight is scoped to, rolled fresh at fight-start (Cultist's Ritual/
-  // Gem Cultivator both target "a random unlocked gem type").
+  // gem_cap / gem_subscore_race win-conditions:
   eliteGemId: null,
-
-  // NEW — gem_cap tracking: running count of that gem cleared this
-  // level (matches + incidental), and whether it's ever exceeded the
-  // cap. Per design, exceeding the cap does NOT end the fight early —
-  // the player still has to clear the level; this flag is just
-  // consulted once the level actually clears.
   eliteGemClearCount: 0,
   eliteCapBreached: false,
-
-  // NEW — gem_subscore_race tracking: running score attributed to
-  // that one gem this level, and the threshold it needs to reach
-  // (computed once at fight-start from that level's target and the
-  // score the player had when the fight began).
   eliteGemSubscore: 0,
   eliteSubscoreThreshold: 0,
 
-  // --- Challenge fields (unchanged) ---
+  // --- Challenge fields ---
   challengeDefId: null,
   challengeForLevel: null,
   challengeDetonated: false,
+  challengeLevelsRemaining: 0,
+
+  // Recurring score-decay tracking (A Test of Endurance). Zeroed/null
+  // for any Challenge def that doesn't declare a `decayEffect`.
+  challengeDecayPercent: 0,
+  challengeDecayIntervalMs: 0,
+  challengeLastDecayAt: null,
+
+  // NEW — time-limit tracking (A Test of Endurance). Zeroed/null for
+  // any Challenge def that doesn't declare a `timeLimitMs` (e.g.
+  // Silent Vein). Resolved the SAME way Elite's time_race is —
+  // checked only at the moment the level actually clears, not via a
+  // live-firing timeout.
+  challengeStartedAt: null,
+  challengeTimeLimitMs: 0,
 };

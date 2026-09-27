@@ -6,31 +6,38 @@
 // render.js decides *how it looks*. This file should stay thin —
 // if logic is getting complicated, it probably belongs in board.js.
 //
-// NEW THIS ROUND:
-//   - Discharger combos: three new swap-activated cases in
-//     attemptSwap() (Hyperstar+Discharger, Discharger+Laser,
-//     Discharger+Discharger), mirroring the existing Hyperstar/Laser
-//     combo pattern. See special_gem.js for the actual cell math.
-//   - Hint feature: scheduleHintTimer()/showHintNow() highlight a
-//     legal move after HINT_DELAY_MS of no real match/cascade. Only
-//     ever (re)scheduled from checkEndState(), since every call to
-//     checkEndState() is itself only ever reached as a consequence of
-//     a real match — see checkEndState()'s doc comment.
-//
-// (Prior rounds' notes: drag-to-swap via onCellDragSwap(), the
-// deferred level-up dialog via `pendingLevelUp`, and the stuck-board
-// game-over dialog via showNoMovesDialog() — see their own doc
-// comments below.)
+// This is the fully consolidated version covering everything from
+// this session:
+//   - Obsidian gem: click/drag guards, "falls off the board" cleanup.
+//   - Dice reworked into a targeted 3x3 tool.
+//   - Frantic Star's extra-target wipe + self-activation check.
+//   - Warmonger/Adventure Junkie's struck-through decline buttons.
+//   - Decaying Birthstone's lethal check.
+//   - Perpetual Boon's per-level gain.
+//   - Event dialog titles now read "[Type] --- [Name]".
+//   - The Challenge engine: multi-level (Silent Vein), a recurring
+//     score decay + a 5-minute time limit (A Test of Endurance).
+//   - Overcharge Essence's per-level gem conversion.
+//   - Resurrection Cross rework: an informational message, or a
+//     Yes/No "try a consumable first?" dialog.
+//   - Booner's stacking chance of a bonus boon offer.
+//   - VIP Membership Card's 10% shop discount.
+//   - The Customer Service shop section (Curse Removal Service,
+//     Limited Edition Boons Sale Service).
+//   - Shop redesign: boon cards now reuse the level-up dialog's
+//     `.boon-card` styling; consumables render as belt-style squares.
 // ============================================================
 
 // --- imports from gameplay ---
 import {
   SIZE, findMatches, hasAnyMatch,
   hasPossibleMove, swap, collapseAndFill,
-  BLOCKED, findHintMove
+  BLOCKED, OBSIDIAN, findHintMove
 } from './board.js';
 
-import { resetBoons, generateBoonOffer, pickBoon } from './boon.js';
+import { settleObsidianOffBoard } from './obsidian.js';
+
+import { resetBoons, generateBoonOffer, pickBoon, isBoonActive, countActiveBoon } from './boon.js';
 import { applyBoonEffect, resetBoonEffects } from './boon_effects.js';
 
 import {
@@ -38,7 +45,7 @@ import {
   calculateBoonPrice, shopTierForLevel, resetBoonShop,
 } from './boon_shop.js';
 
-import { resetCurses, getActiveCurseDefsByKind } from './curse.js'; // CHANGED — added getActiveCurseDefsByKind
+import { resetCurses, getActiveCurseDefsByKind, recordDecayingBirthstoneActivity } from './curse.js';
 
 import { getGemBaseScore, getGemBaseMultiplier } from './gem_base.js';
 import { addHistoryEntry, resetHistory } from './history.js';
@@ -57,6 +64,7 @@ import {
   resolveSpecialGems, applySpawns, clearSpecialGems, resetSpecialGems,
   triggerHyperstarSingle, triggerHyperstarLaserCombo, triggerHyperstarDouble, triggerLaserCombo,
   triggerHyperstarDischargerCombo, triggerDischargerLaserCombo, triggerDischargerDouble,
+  triggerHyperstarSelfActivation, convertRandomPlainGemsToSpecial,
 } from './special_gem.js';
 
 import {
@@ -64,13 +72,21 @@ import {
   getExpandableCells, rebuildGridRespectingBlocked,
 } from './tiles.js';
 
+// --- NEW — Customer Service ---
+import {
+  calculateCurseRemovalPrice, removeCurseViaService, rollLimitedEditionBoonOffer,
+  markCustomerServiceUsed, resetCustomerServiceVisit, resetCustomerService,
+} from './customer_service.js';
+import { customerServiceState } from '../resources/shop/customer_service_state.js';
+
 // --- imports from resources ---
-import { 
-  DEFAULT_GEM_BASE_SCORE, DEFAULT_GEM_BASE_MULTIPLIER 
+import {
+  DEFAULT_GEM_BASE_SCORE, DEFAULT_GEM_BASE_MULTIPLIER
 } from '../resources/base%20value/base_score.js';
 
-import { BOON_TYPE } from '../resources/boon/boon.js';
+import { BOON_TYPE, BOON_POOL } from '../resources/boon/boon.js';
 import { boonEffectState } from '../resources/boon/boon_effect_state.js';
+import { boonState } from '../resources/boon/boon_state.js';
 
 import {
   PREVENT_DEADLOCK, DEFAULT_SCORE, SWAP_ANIM_MS, MATCH_CLEAR_DELAY_MS,
@@ -79,18 +95,18 @@ import {
   TILE_SHAPES, GEM_DEFINITIONS, ALL_GEM_CATALOG
 } from '../resources/constant/constants.js';
 
-import { CURSE_POOL } from '../resources/curse/curse.js'; // NEW
-import { curseState } from '../resources/curse/curse_state.js'; // NEW
+import { CURSE_POOL } from '../resources/curse/curse.js';
+import { curseState } from '../resources/curse/curse_state.js'; // NEW — needed for the curse-removal picker list
 
 import {
   tryTriggerEvent, buildEncounterOffer, resolveEncounterAccept, resolveEncounterDecline,
   pickEliteDef, startEliteFight, declineElite, resolveEliteOutcome, getEliteProgressInfo,
   pickChallengeDef, startChallenge, declineChallenge, markChallengeDetonation,
-  resolveChallengeOutcome, getActiveChallengeDef, resetEvents,
+  checkChallengeLevelClear, applyChallengeDecayIfDue, getActiveChallengeDef, resetEvents,
   placeFortunesFollyBet, flipFortunesFollyDoubleOrNothing, payFortunesFollyAndLeave,
   resolveLostMinerHelp, resolveLostMinerAbsorb,
   recordEliteGemActivity,
-  formatNamedEffectSpan, // NEW
+  formatNamedEffectSpan,
 } from './event.js';
 import { EVENT_TYPE } from '../resources/event/event.js';
 import { activeEventState } from '../resources/event/event_state.js';
@@ -108,7 +124,7 @@ import { progressionState } from '../resources/progression/progression.js';
 
 import {
   addConsumableToInventory, removeConsumableFromInventory, findFirstConsumableOfType,
-  hasBeltSpace, resetConsumables, triggerPickaxe, triggerDynamite, triggerDiceShuffle,
+  hasBeltSpace, resetConsumables, triggerPickaxe, triggerDynamite, triggerDiceShuffleArea,
 } from './consumable.js';
 import {
   rollConsumableShopOffer, calculateConsumablePrice, isConsumablePurchasedThisVisit,
@@ -116,6 +132,36 @@ import {
 } from './consumable_shop.js';
 import { CONSUMABLE_INFO, CONSUMABLE_TYPE } from '../resources/consumable/consumable.js';
 import { consumableState } from '../resources/consumable/consumable_state.js';
+
+// The belt types that actually change the board layout (Pickaxe/
+// Dynamite/Dice), as opposed to Golden Ticket (a pure score buff) or
+// the Resurrection Cross itself (passive).
+const BOARD_CHANGING_CONSUMABLE_TYPES = [
+  CONSUMABLE_TYPE.PICKAXE,
+  CONSUMABLE_TYPE.DYNAMITE,
+  CONSUMABLE_TYPE.DICE,
+];
+
+// NEW — every event dialog's title now reads "[Event type] --- [Event
+// name]" (e.g. "Elite --- The Gem Cultivator") instead of just the
+// bare event name.
+const EVENT_TYPE_LABEL = {
+  [EVENT_TYPE.ENCOUNTER]: 'Encounter',
+  [EVENT_TYPE.ELITE]: 'Elite',
+  [EVENT_TYPE.CHALLENGE]: 'Challenge',
+};
+
+/**
+ * Builds the shared "[Event type] --- [Event name]" title format used
+ * by every event dialog.
+ *
+ * @param {string} type - an EVENT_TYPE value.
+ * @param {string} name - the specific event def's own name.
+ * @returns {string}
+ */
+function formatEventTitle(type, name) {
+  return `${EVENT_TYPE_LABEL[type] || ''} --- ${name}`;
+}
 
 // --- DOM references, grabbed once ---
 const boardEl         = document.getElementById('board');
@@ -146,8 +192,8 @@ const boonChoicesEl   = document.getElementById('boon-choices');
 const globalMultiplierEl = document.getElementById('global-multiplier');
 const globalBonusEl      = document.getElementById('global-bonus');
 const gemStatsListEl     = document.getElementById('gem-stats-list');
-const targetMultiplierEl = document.getElementById('target-multiplier'); // NEW
-const curseListEl        = document.getElementById('curse-list');       // NEW
+const targetMultiplierEl = document.getElementById('target-multiplier');
+const curseListEl        = document.getElementById('curse-list');
 
 const historyListEl = document.getElementById('history-list');
 const shopDialogEl    = document.getElementById('shop-dialog');
@@ -155,116 +201,60 @@ const shopTitleEl     = document.getElementById('shop-title');
 const shopSubtitleEl  = document.getElementById('shop-subtitle');
 const shopChoicesEl   = document.getElementById('shop-choices');
 const shopLeaveBtn    = document.getElementById('shop-leave');
+const customerServiceChoicesEl = document.getElementById('customer-service-choices'); // NEW
 
 const versionTagEl = document.getElementById('version-tag');
 
-// NEW — the whole "MOVES LEFT" stat block, so it can be hidden
-// entirely when ENABLE_MOVES_LIMIT is off (constants.js).
 const movesStatEl = document.getElementById('moves-stat');
 
-// NEW — objective banner (Elite countdown / Challenge status).
 const objectiveBannerEl = document.getElementById('objective-banner');
 const objectiveTextEl   = document.getElementById('objective-text');
 
-// NEW — the one shared dialog for all three event types.
 const eventDialogEl   = document.getElementById('event-dialog');
 const eventTitleEl    = document.getElementById('event-title');
 const eventStoryEl    = document.getElementById('event-story');
 const eventChoicesEl  = document.getElementById('event-choices');
 
-// NEW — the 3 fixed belt slot elements, and the two new dialog pieces.
 const beltSlotEls = document.querySelectorAll('#consumable-belt .belt-slot');
 const goldenTicketStatusEl = document.getElementById('golden-ticket-status');
 const consumableShopChoicesEl = document.getElementById('consumable-shop-choices');
+
+const deadlockDialogEl   = document.getElementById('deadlock-dialog');
+const deadlockMessageEl  = document.getElementById('deadlock-message');
+const deadlockYesBtn     = document.getElementById('deadlock-yes');
+const deadlockNoBtn      = document.getElementById('deadlock-no');
 
 // --- mutable game state ---
 let grid;
 let score;
 let moves;
-let selected; // [row, col] of the currently selected cell, or null
-let placementMode; // 'construct' | 'deconstruct' | null — which action is armed
-let placementShape; // key into SLOT_SHAPES, or null until the player picks one
-// Holds the remaining placement phases for the boon currently being
-// placed (one phase for a plain expand or shrink boon; two — expand
-// then shrink, per the design doc's "addition first, then removal" —
-// for a combined risky boon), plus what to call once every phase for
-// this boon is done.
+let selected;
+let placementMode;
+let placementShape;
 let tilePlacementQueue = [];
 let tilePlacementFinalContinuation = null;
-let busy; // true while an animation/cascade is resolving — blocks input
-let comboCount; // how many cascade steps deep we are within one swap; resets each new swap
+let busy;
+let comboCount;
 
-// NEW — handle for the score popup's pending "fade back out" timer,
-// so a second popup arriving while the first is still showing can
-// cancel and restart the clock instead of getting cut off early.
 let scorePopupHideTimeout = null;
-// Set by showLevelUpDialog(); holds the "resume/finish up" callback
-// that the boon dialog invokes once the player has picked a boon.
 let pendingContinuation = null;
-
-// Set to true the moment ANY cascade step (normal match OR a
-// swap-activated combo) crosses a level's score target, and only
-// acted on once the WHOLE cascade has fully settled (see
-// resolveMatches()'s `!hasAnyMatch` branch). This is what makes the
-// level-up dialog wait for every chain-reaction step, spawn, and
-// refill to finish before interrupting, instead of popping up the
-// instant the target is crossed mid-cascade.
 let pendingLevelUp = false;
-
-// NEW — handle for the pending hint timer (see scheduleHintTimer()/
-// showHintNow()). Tracked so a new schedule call can cancel whatever
-// was pending before starting a fresh countdown.
 let hintTimeoutId = null;
-// Set by openShopDialog(); holds the "resume whatever was paused for
-// the shop" callback, invoked once the player clicks Leave. Same
-// stash-a-callback pattern showLevelUpDialog()/showBoonDialog() use.
 let shopContinuation = null;
-// Which shop tier is currently open — set once when the shop opens,
-// read by renderShopDialog() for every card's price. Doesn't change
-// mid-visit.
 let currentShopTier = 1;
-// NEW — the player's score at the MOMENT the shop opened, snapshotted
-// once. Every card's price is based on THIS, not the live `score`
-// variable — otherwise buying one boon would lower `score`, which
-// would immediately cheapen every other card still on the shelf
-// (since price includes a rarity% x score term). Reset to 0 mainly
-// for tidiness; it's always overwritten by openShopDialog() before
-// renderShopDialog() ever reads it.
 let shopEntryScore = 0;
-// NEW — handle for the objective banner's 1-second tick, so the Elite
-// countdown stays live regardless of what else is happening on
-// screen. Started once in init(); left running for the rest of the
-// page's life (it's a cheap no-op whenever nothing is active).
 let objectiveIntervalId = null;
-
-// NEW — stashed by applyScoreGain() whenever an Elite/Challenge
-// resolves as part of THAT gain (win, lose, whatever it fired). Read
-// and cleared by resolveMatches()'s deferred level-up flow, so the
-// player sees a proper result DIALOG (not just a History line) for
-// what just happened, shown right before the "Level Cleared!" dialog.
 let pendingEventResult = null;
-
-// NEW — set while a target-requiring consumable (Pickaxe/Dynamite) is
-// armed, waiting for the player's next board click. Mirrors
-// placementMode's "next click does something special" pattern.
 let pendingConsumableEntry = null;
-
-// NEW — Golden Ticket bookkeeping. `pendingGoldenTicketTurn` is set
-// true at the very top of attemptSwap() (a real player-initiated swap
-// attempt) and cleared either immediately (if the swap is invalid) or
-// once its full cascade settles inside resolveMatches() — see both
-// for why this is the one reliable way to detect "a whole swap+
-// cascade turn just finished," independent of which of attemptSwap()'s
-// 8 dispatch cases actually fired.
 let pendingGoldenTicketTurn = false;
 let goldenTicketTurnsRemaining = 0;
 
+// NEW — true while the Customer Service section is showing the
+// "select a curse to remove" list instead of its normal two cards.
+let curseRemovalPickerOpen = false;
+
 /**
- * Sets every bit of static, non-runtime-dependent text (title,
- * masthead, button labels, dialog titles) from text.js. This runs
- * once on page load, independent of whether a game is actually in
- * progress — the masthead/title need to be correct even while the
- * start screen is showing, before init() has ever run.
+ * Sets every bit of static, non-runtime-dependent text.
  *
  * @returns {void}
  */
@@ -277,16 +267,14 @@ function applyStaticText() {
   loseTitleEl.textContent = DIALOG_TITLES.LOSE;
   levelUpTitleEl.textContent = DIALOG_TITLES.LEVEL_UP;
   boonTitleEl.textContent = DIALOG_TITLES.BOON;
-  shopTitleEl.textContent = DIALOG_TITLES.SHOP;       // NEW
-  shopLeaveBtn.textContent = BUTTONS.LEAVE_SHOP;      // NEW
-  versionTagEl.textContent = GAME_VERSION; // NEW
+  shopTitleEl.textContent = DIALOG_TITLES.SHOP;
+  shopLeaveBtn.textContent = BUTTONS.LEAVE_SHOP;
+  versionTagEl.textContent = GAME_VERSION;
 }
 
 /**
  * Hides the "MOVES LEFT" stat block entirely when the moves-limit
- * mechanic is shelved (ENABLE_MOVES_LIMIT === false in constants.js).
- * Called once on page load, not per-run — this is a feature flag,
- * not game state, so it never needs to toggle mid-session.
+ * mechanic is shelved.
  *
  * @returns {void}
  */
@@ -297,58 +285,23 @@ function applyMovesLimitVisibility() {
 }
 
 /**
- * Renders the left-side stats panel: each active gem's current
- * matching bonus (Affinity + Frenzy combined — see score.js's
- * getMatchBonusForGem()), base score, and base multiplier, plus the
- * two global boon totals.
- *
- * The ONLY things that can change any of these numbers are boon
- * picks (Affinity/Bounty/Brilliance/Opulence/Frenzy/Enthusiast/Addict/
- * Maniac/Fanatic, and the 4 global boons) — so this only needs to run
- * once in init() and again right after applyBoonEffect(), not on
- * every score change.
- *
- * Only the 7 ACTIVE gems are shown (GEM_DEFINITIONS) — the 4
- * locked/future gems (Onyx etc.) can still quietly accumulate Opulence/
- * Maniac penalties in gemBaseState, but showing that here would just
- * be confusing before they're actually unlockable.
- *
- * Each row's "match" stat carries a small gem icon inline (the same
- * svg render.js uses for the board itself). Every number shown here
- * — the two global stats and all three per-gem stats — is also
- * colored relative to its OWN no-boon default (see statDiffClass()):
- * green once a boon has pushed it up, red once a boon has pulled it
- * down, left alone if nothing's touched it.
+ * Renders the left-side stats panel.
  *
  * @returns {void}
  */
 function renderSideStats() {
   globalMultiplierEl.textContent = `${boonEffectState.globalScoreMultiplier.toFixed(2)}x`;
   globalBonusEl.textContent = signed(boonEffectState.globalScoreBonus);
-  // Global multiplier's no-boon default is 1.0x; global bonus's is +0.
-  // className is fully overwritten (not just toggled) each render, so
-  // there's no risk of a stale boosted/penalized class lingering from
-  // a previous boon pick.
   globalMultiplierEl.className = `side-stat-value ${statDiffClass(boonEffectState.globalScoreMultiplier, 1.0)}`;
   globalBonusEl.className = `side-stat-value ${statDiffClass(boonEffectState.globalScoreBonus, 0)}`;
 
-  // Rebuilt from scratch every call — cheap at 7 rows, and much
-  // simpler than diffing individual rows in place.
   gemStatsListEl.innerHTML = '';
 
   GEM_DEFINITIONS.forEach(({ id, name, file }) => {
     const baseScore = getGemBaseScore(id);
     const baseMultiplier = getGemBaseMultiplier(id);
-    // Combines Affinity's flat bonus with every active Frenzy pick's
-    // bonus/penalty for this specific gem — this is what fixes
-    // Frenzy never showing up here (it used to only read
-    // boonEffectState.affinityBonus directly, which Frenzy never
-    // touches).
     const matchBonus = getMatchBonusForGem(id);
 
-    // Each stat's color is relative to ITS OWN no-boon default: base
-    // score defaults to 10, base multiplier to 1.0, match bonus to 0
-    // (no Affinity/Frenzy picked for this gem at all).
     const baseScoreClass = statDiffClass(baseScore, DEFAULT_GEM_BASE_SCORE);
     const baseMultiplierClass = statDiffClass(baseMultiplier, DEFAULT_GEM_BASE_MULTIPLIER);
     const matchBonusClass = statDiffClass(matchBonus, 0);
@@ -365,37 +318,15 @@ function renderSideStats() {
     `;
     gemStatsListEl.appendChild(row);
   });
-  // NEW (item 6) — target score multiplier footer row, directly
-  // below the gem list. Reads the SAME
-  // boonEffectState.targetScoreMultiplier that every scoreTarget
-  // calculation already multiplies by — this is a read-only display,
-  // nothing here can change the number itself.
+
   targetMultiplierEl.textContent = `${boonEffectState.targetScoreMultiplier.toFixed(2)}x`;
   targetMultiplierEl.className = `side-stat-value ${statDiffClass(boonEffectState.targetScoreMultiplier, 1.0)}`;
 
-  // NEW (item 7) — refresh the active-curses list every time stats
-  // refresh. Curses are only ever granted alongside a
-  // renderSideStats() call that's already happening somewhere (Lost
-  // Miner's absorb, an Elite loss) — folding this in here means
-  // every existing call site updates the curse panel automatically,
-  // no need to hunt down and add a second call at each curse-granting
-  // site individually.
   renderCursePanel();
 }
 
 /**
- * NEW (item 7) — rebuilds the "Active Curses" list at the bottom of
- * the side-stats panel from curseState.activeCurses, from scratch,
- * every call — same "just rebuild it" convention as
- * renderSideStats()/renderHistoryPanel(). Shows a plain "No active
- * curses." line when the list is empty, instead of leaving a blank
- * gap that could read as a rendering bug.
- *
- * Each curse name is rendered as the same dashed-underline, tooltip-
- * bearing span used for boon names elsewhere (formatNamedEffectSpan(),
- * gameplay/event.js), flagged `isCurse: true` so it gets the
- * dedicated curse color instead of a rarity color (curses don't have
- * a rarity of their own).
+ * Rebuilds the "Active Curses" list at the bottom of the side-stats panel.
  *
  * @returns {void}
  */
@@ -411,17 +342,11 @@ function renderCursePanel() {
   }
 
   curseState.activeCurses.forEach(activeCurse => {
-    // Look up the full curse DEFINITION (name/description) off its
-    // id — activeCurses entries themselves only carry the lightweight
-    // pickId/id/pickedAtLevel/appliedEffect shape, same split every
-    // other active-pick list in the game uses.
     const def = CURSE_POOL.find(c => c.id === activeCurse.id);
-    if (!def) return; // shouldn't happen, but don't crash on a stale/unknown id
+    if (!def) return;
 
     const row = document.createElement('div');
     row.className = 'curse-entry';
-    // innerHTML (not textContent) is required — formatNamedEffectSpan()
-    // returns real <span> markup (tooltip/color/underline), not plain text.
     row.innerHTML = formatNamedEffectSpan(def, true);
     curseListEl.appendChild(row);
   });
@@ -430,20 +355,6 @@ function renderCursePanel() {
 /**
  * Rebuilds the right-side History panel from historyState.entries.
  *
- * Newest entries are shown at the TOP of the list (reverse
- * chronological) — a running combat log reads better with the
- * latest line front-and-center than making the player scroll down
- * every time something new happens.
- *
- * Colors each line via a CSS class off its stored `tone`: green
- * ('positive'), red ('negative'), or the panel's normal dim color
- * ('neutral' — no extra class needed, it just inherits).
- *
- * Called every time a new entry is pushed (see the addHistoryEntry()
- * call sites below) — cheap at a max of MAX_HISTORY_ENTRIES (200)
- * short rows, same "just rebuild it from scratch" approach
- * renderSideStats() already uses.
- *
  * @returns {void}
  */
 function renderHistoryPanel() {
@@ -451,22 +362,13 @@ function renderHistoryPanel() {
   historyState.entries.slice().reverse().forEach(entry => {
     const row = document.createElement('div');
     row.className = `history-entry history-entry--${entry.tone}`;
-    // CHANGED — innerHTML instead of textContent, same reasoning as
-    // showEventResult() above: an entry's text can now carry a styled
-    // boon/curse-name <span> (Elite/Encounter/Lost Miner outcome
-    // lines) that needs to render as real markup, not literal tags.
     row.innerHTML = entry.text;
     historyListEl.appendChild(row);
   });
 }
 
 /**
- * NEW — rebuilds the 3-slot consumable belt from consumableState.inventory,
- * from scratch, every call — same "just rebuild it" convention every
- * other panel in this game uses. An empty slot is left blank; a
- * filled one shows the item's icon and a hover tooltip
- * (name + description), and is wired to onBeltSlotClick() unless it's
- * a passive item (Resurrection Cross — nothing to click).
+ * Rebuilds the 3-slot consumable belt from consumableState.inventory.
  *
  * @returns {void}
  */
@@ -478,7 +380,7 @@ function renderConsumableBelt() {
     slotEl.onclick = null;
 
     const entry = consumableState.inventory[i];
-    if (!entry) return; // this slot is empty — leave it blank
+    if (!entry) return;
 
     const info = CONSUMABLE_INFO[entry.type];
     slotEl.classList.add('belt-slot--filled');
@@ -497,21 +399,49 @@ function renderConsumableBelt() {
 }
 
 /**
- * NEW — handles a click on a filled, non-passive belt slot. Target-
- * requiring items (Pickaxe/Dynamite) arm targeting mode and wait for
- * the next board click; everything else (Dice/Golden Ticket)
- * activates immediately.
+ * Same dashed-underline/hover-tooltip treatment formatNamedEffectSpan()
+ * (event.js) gives boon/curse names, built here for a CONSUMABLE_TYPE
+ * instead (used by the Resurrection Cross's deadlock messaging).
  *
- * @param {object} entry - the consumableState.inventory entry that
- *   was clicked (has .pickId/.type).
+ * @param {string} type - a CONSUMABLE_TYPE value.
+ * @returns {string} an HTML string — render via innerHTML.
+ */
+function formatConsumableNameSpan(type) {
+  const info = CONSUMABLE_INFO[type];
+  const description = String(info.description)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return `<span class="event-inline-name event-inline-name--consumable" data-tooltip="${description}">${info.name}</span>`;
+}
+
+/**
+ * NEW — applies VIP Membership Card's 10% shop-price discount, if
+ * held. Wrapped around every price shown/charged anywhere in the shop
+ * dialog (boon cards, consumable squares, both Customer Service
+ * prices) — a single call site keeps the discount consistent instead
+ * of re-checking isBoonActive() at each individual price line.
+ *
+ * @param {number} price
+ * @returns {number}
+ */
+function applyVipDiscount(price) {
+  return isBoonActive('vip_membership_card') ? Math.round(price * 0.9) : price;
+}
+
+/**
+ * Handles a click on a filled, non-passive belt slot.
+ *
+ * @param {object} entry
  * @returns {void}
  */
 function onBeltSlotClick(entry) {
   if (busy) return;
-  if (placementMode || pendingConsumableEntry) return; // don't stack modes
+  if (placementMode || pendingConsumableEntry) return;
 
   const info = CONSUMABLE_INFO[entry.type];
-  if (info.passive) return; // shouldn't be reachable (not wired to onclick), safety net anyway
+  if (info.passive) return;
 
   if (info.requiresTarget) {
     pendingConsumableEntry = entry;
@@ -519,18 +449,19 @@ function onBeltSlotClick(entry) {
     return;
   }
 
-  if (entry.type === CONSUMABLE_TYPE.DICE) {
-    activateDiceConsumable(entry);
-  } else if (entry.type === CONSUMABLE_TYPE.GOLDEN_TICKET) {
+  if (entry.type === CONSUMABLE_TYPE.GOLDEN_TICKET) {
     activateGoldenTicketConsumable(entry);
   }
+  // NOTE — Dice used to have its own no-target branch here
+  // (activateDiceConsumable()). Dice is now `requiresTarget: true`
+  // (see resources/consumable/consumable.js), so it's caught by the
+  // `if (info.requiresTarget)` branch above instead, same as
+  // Pickaxe/Dynamite — this function never reaches Dice anymore.
 }
 
 /**
- * NEW — handles the board click that lands while a target-requiring
- * consumable (Pickaxe/Dynamite) is armed. Clicking a BLOCKED cell is
- * a no-op (doesn't consume the item or cancel targeting) so a misclick
- * doesn't waste it — only a valid target actually spends it.
+ * Handles the board click that lands while a target-requiring
+ * consumable (Pickaxe/Dynamite/Dice) is armed.
  *
  * @param {number} row
  * @param {number} col
@@ -538,12 +469,40 @@ function onBeltSlotClick(entry) {
  */
 function handleConsumableTargetClick(row, col) {
   if (grid[row][col] === BLOCKED) return;
+  // NEW — an Obsidian cell can't be targeted either: nothing for
+  // Pickaxe/Dynamite to meaningfully destroy there beyond what a
+  // normal gem already offers, and Dice already excludes Obsidian
+  // from its own shuffle pool — blocking the click here too keeps
+  // the "select a target" flow consistent (clicking Obsidian just
+  // does nothing, same as clicking a BLOCKED cell).
+  if (grid[row][col] === OBSIDIAN) return;
 
   const entry = pendingConsumableEntry;
   pendingConsumableEntry = null;
 
   busy = true;
   messageEl.textContent = '';
+
+  // NEW — Dice's own branch: no clearing, no scoring at all, just a
+  // scoped 3x3 color shuffle, then let the normal cascade pipeline
+  // catch whatever matches the shuffle happens to create (same as
+  // the old whole-board Dice used to do, just scoped to the area).
+  if (entry.type === CONSUMABLE_TYPE.DICE) {
+    triggerDiceShuffleArea(grid, row, col);
+
+    removeConsumableFromInventory(entry.pickId);
+    renderConsumableBelt();
+    renderBoardWithInteractions();
+
+    addHistoryEntry('event', 'Dice shuffles a 3\u00d73 area of the board.', 'event');
+    renderHistoryPanel();
+
+    comboCount = 0;
+    // No swapCells — this isn't a swap, so any special gem that DOES
+    // happen to spawn falls back to the normal spawn rule.
+    resolveMatches();
+    return;
+  }
 
   let clearedCells = [];
   let comboLabel = '';
@@ -555,29 +514,17 @@ function handleConsumableTargetClick(row, col) {
     comboLabel = 'Dynamite';
   }
 
-  // Consumed the instant it's activated, whether or not it actually
-  // cleared anything useful — no refunds, same rule every other
-  // one-shot item in this game follows.
   removeConsumableFromInventory(entry.pickId);
   renderConsumableBelt();
 
   if (clearedCells.length === 0) {
-    // Nothing there to destroy — still spent the item, just nothing
-    // to score or cascade.
     busy = false;
     checkEndState();
     return;
   }
 
-  // Fresh cascade baseline — same reasoning finishSwapActivatedCombo()
-  // follows for the 7 swap-activated combos.
   comboCount = 0;
 
-  // Everything a consumable clears is scored as flat incidental cells
-  // (no match-size multiplier bonus), even a chain-reaction Hyperstar
-  // wipe — deliberately simpler than trying to replicate the swap
-  // version's favorable "matched group" treatment for an arbitrary,
-  // possibly-mixed-source clear. Flagged in the handoff.
   const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
   const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
 
@@ -587,46 +534,14 @@ function handleConsumableTargetClick(row, col) {
   markMatchedGems(boardEl, toBooleanGrid(clearedCells));
 
   // NOT routed through recordEliteGemActivity()/markChallengeDetonation()
-  // — consumables don't interact with an active Elite/Challenge's
-  // tracking yet. Known gap, see handoff.
+  // or recordDecayingBirthstoneActivity() — consumables don't interact
+  // with an active Elite/Challenge/Decaying-Birthstone's tracking yet.
+  // Known gap, see handoff.
   continueCascadeAfterMatch(clearedCells);
 }
 
 /**
- * NEW — Dice: shuffles the board, then lets the NORMAL cascade
- * pipeline catch and resolve any matches the shuffle happens to
- * create (allowed to happen, not guarded against — a nice bonus).
- * Doesn't set pendingGoldenTicketTurn, so using Dice never burns a
- * Golden Ticket turn even though it goes through the same
- * resolveMatches() code path a real swap does.
- *
- * @param {object} entry
- * @returns {void}
- */
-function activateDiceConsumable(entry) {
-  busy = true;
-  messageEl.textContent = '';
-
-  triggerDiceShuffle(grid);
-
-  removeConsumableFromInventory(entry.pickId);
-  renderConsumableBelt();
-  renderBoardWithInteractions();
-
-  addHistoryEntry('event', 'Dice shuffles the board.', 'event');
-  renderHistoryPanel();
-
-  comboCount = 0;
-  // No swapCells — this isn't a swap, so any special gem that DOES
-  // happen to spawn from an accidental match falls back to the
-  // normal middle/intersection spawn rule (no "swap cell" to prefer).
-  resolveMatches();
-}
-
-/**
- * NEW — Golden Ticket: (re)starts the 2x-score window at
- * GOLDEN_TICKET_TURNS turns, overwriting rather than stacking if one
- * was already active.
+ * Golden Ticket: (re)starts the 2x-score window.
  *
  * @param {object} entry
  * @returns {void}
@@ -642,10 +557,7 @@ function activateGoldenTicketConsumable(entry) {
 }
 
 /**
- * NEW — decrements the Golden Ticket counter by one, IF one is
- * active. Called exactly once per completed player-swap turn — see
- * pendingGoldenTicketTurn's doc comment for why resolveMatches()'s
- * settle branch is the one reliable place to call this from.
+ * Decrements the Golden Ticket counter by one, IF one is active.
  *
  * @returns {void}
  */
@@ -668,17 +580,15 @@ function updateGoldenTicketStatus() {
 }
 
 /**
- * NEW — buys one consumable from the shop's consumable offer:
- * deducts its price, adds it to the belt, marks it purchased this
- * visit, and re-renders everything affected.
+ * Buys one consumable from the shop's consumable offer.
  *
- * @param {string} type - a CONSUMABLE_TYPE value.
+ * @param {string} type
  * @param {number} price
  * @returns {void}
  */
 function buyConsumableFromShop(type, price) {
-  if (score < price) return;       // safety net — card shouldn't be clickable here
-  if (!hasBeltSpace()) return;     // safety net — same
+  if (score < price) return;
+  if (!hasBeltSpace()) return;
 
   score -= price;
   scoreEl.textContent = score;
@@ -691,14 +601,12 @@ function buyConsumableFromShop(type, price) {
   addHistoryEntry('boon', `Bought from shop: ${info.name} (-${price}) — ${info.description}`, 'boon');
   renderHistoryPanel();
 
-  renderShopDialog(); // reflect new score + this card's bought state (and belt-full state on the others)
+  renderShopDialog();
 }
 
 /**
  * Converts a list of [row, col] pairs into the boolean SIZE x SIZE
- * grid markMatchedGems() (render.js) expects, so both the normal
- * match flow and every swap-activated combo can drive the same pop
- * animation off whatever cell list they actually cleared.
+ * grid markMatchedGems() (render.js) expects.
  *
  * @param {[number, number][]} cells
  * @returns {boolean[][]}
@@ -709,25 +617,15 @@ function toBooleanGrid(cells) {
   return g;
 }
 
-/** Formats a score delta with an explicit sign; negative values keep their own "-". */
+/** Formats a score delta with an explicit sign. */
 function signed(amount) {
   return amount >= 0 ? `+${amount}` : `${amount}`;
 }
 
 /**
- * NEW — the isExcluded predicate for board.js's findMatches()/
+ * The isExcluded predicate for board.js's findMatches()/
  * hasPossibleMove()/findHintMove(): true for any cell currently
- * holding a Hyperstar. A Hyperstar is swap-activated ONLY (see
- * special_gem.js's resolveSpecialGems() dispatch — it deliberately
- * has no passive-match case) — but without this, findMatches() would
- * still happily sweep a Hyperstar's cell into an adjacent plain-color
- * run purely because its underlying grid[][] value still matches
- * that color, silently destroying it as a "bonus matched gem"
- * instead of leaving it on the board to be triggered by an actual
- * swap combo. Laser/Discharger are deliberately NOT excluded here —
- * being swept into a normal match (or a chain-reaction blast) is how
- * THEIR passive effect is meant to trigger; only Hyperstar needs to
- * stand apart.
+ * holding a Hyperstar.
  *
  * @param {number} row
  * @param {number} col
@@ -738,21 +636,8 @@ function isHyperstarCell(row, col) {
 }
 
 /**
- * NEW — the isSpecialSwap predicate for board.js's hasPossibleMove()/
- * findHintMove(): true if swapping (r1,c1) with (r2,c2) is legal
- * purely because of what's sitting in those two cells, independent of
- * any color match. Mirrors attemptSwap()'s own case-1-through-7
- * dispatch order exactly:
- *   - either cell is a Hyperstar -> ALWAYS legal (covers cases 1-4:
- *     Hyperstar+Hyperstar, Hyperstar+Laser, Hyperstar+Discharger,
- *     Hyperstar+plain gem — a Hyperstar swap is never "invalid").
- *   - neither is a Hyperstar, but BOTH cells hold some special gem
- *     (so some Laser/Discharger combination) -> ALWAYS legal too
- *     (covers cases 5-7: Laser+Laser, Discharger+Laser either way,
- *     Discharger+Discharger).
- *   - anything else (a lone Laser/Discharger next to a plain gem, or
- *     two plain gems) -> not a guaranteed move; falls through to the
- *     normal findMatches() color-match check instead.
+ * The isSpecialSwap predicate for board.js's hasPossibleMove()/
+ * findHintMove().
  *
  * @param {number} r1
  * @param {number} c1
@@ -765,30 +650,12 @@ function isSpecialSwapPair(r1, c1, r2, c2) {
   const b = specialGemState.grid[r2][c2];
 
   if (a === SPECIAL_GEM_TYPE.HYPERSTAR || b === SPECIAL_GEM_TYPE.HYPERSTAR) return true;
-
-  // Neither is a Hyperstar — legal only if BOTH sides are some special
-  // gem (both truthy). A single special next to a plain gem is NOT
-  // automatically legal — that's a normal swap that still needs an
-  // actual color match to succeed.
   return !!a && !!b;
 }
 
 /**
  * Builds the History/popup text for one cascade STEP resolved via the
- * normal match-detection path (resolveMatches()) — NOT the
- * swap-activated special-gem combos, which build their own dedicated
- * "<Combo Name>: <score>" text at their own call sites (see the
- * handleXXX functions below).
- *
- * Format:
- *   - Single formed match:      "Match 3 Amethyst: +80"
- *   - Multiple simultaneous
- *     formed matches:           "Match 3 Amethyst + Match 4 Ruby: +215"
- *   - Any blast-chained
- *     (incidental) cells
- *     riding along this step:   "...+ Chain Reaction (5 gems): +215"
- *   - A combo step (2nd+ link
- *     in one cascade):          "Combo x2: Match 3 Ruby: +140"
+ * normal match-detection path.
  *
  * @param {{gemType: number, length: number}[]} matchedGroups
  * @param {{gemType: number, row: number, col: number}[]} incidentalCells
@@ -797,24 +664,15 @@ function isSpecialSwapPair(r1, c1, r2, c2) {
  * @returns {string}
  */
 function buildMatchMessage(matchedGroups, incidentalCells, comboCount, gained) {
-  // One "Match N GemName" fragment per formed group this step —
-  // usually just one, but two separate matches CAN complete on the
-  // same board update (e.g. a cascade's fall completing two
-  // unrelated runs at once).
   const matchParts = matchedGroups.map(({ gemType, length }) => {
     const gemName = GEM_DEFINITIONS[gemType]?.name ?? 'Gem';
     return `Match ${length} ${gemName}`;
   });
 
-  // A chain-reaction (an EXISTING special gem's blast triggering as
-  // part of this same step) gets its own fragment rather than being
-  // silently folded into the score with no mention at all.
   if (incidentalCells.length > 0) {
     matchParts.push(`Chain Reaction (${incidentalCells.length} gems)`);
   }
 
-  // Shouldn't normally happen (a scored step always has SOME cleared
-  // cells) but guards against printing "undefined: +80".
   const body = matchParts.length > 0 ? matchParts.join(' + ') : 'Match';
 
   const prefix = comboCount > 1 ? `Combo x${comboCount}: ` : '';
@@ -823,17 +681,11 @@ function buildMatchMessage(matchedGroups, incidentalCells, comboCount, gained) {
 
 /**
  * Picks the CSS class that colors a side-stat value relative to its
- * OWN no-boon default: green (gem-stat-boosted) if a boon has pushed
- * it above that default, red (gem-stat-penalized) if a boon has
- * pulled it below, or '' (leave the row's normal color alone) if
- * nothing's touched it yet. Shared by every stat shown in the side
- * panel — each caller just passes in its own no-boon default (10 for
- * base score, 1.0 for base multiplier, 0 for match bonus / global
- * bonus, 1.0 for global multiplier).
+ * OWN no-boon default.
  *
- * @param {number} value - the stat's current (boon-adjusted) value.
- * @param {number} defaultValue - what the stat would be with no boons picked at all.
- * @returns {string} a CSS class name, or '' for "unchanged from default."
+ * @param {number} value
+ * @param {number} defaultValue
+ * @returns {string}
  */
 function statDiffClass(value, defaultValue) {
   if (value > defaultValue) return 'gem-stat-boosted';
@@ -842,11 +694,7 @@ function statDiffClass(value, defaultValue) {
 }
 
 /**
- * Thin wrapper around render.js's renderBoard() so every call site in
- * this file automatically wires up drag-to-swap (onCellDragSwap)
- * without repeating `{ onCellSwap: onCellDragSwap }` at every call
- * site. Anything passed in `extraOptions` (currently just
- * `ghostCells`, during a tile placement) is merged in on top.
+ * Thin wrapper around render.js's renderBoard().
  *
  * @param {object} [extraOptions]
  * @returns {void}
@@ -856,14 +704,7 @@ function renderBoardWithInteractions(extraOptions = {}) {
 }
 
 /**
- * NEW — (re)starts the hint countdown: cancels whatever was pending
- * and schedules showHintNow() to fire HINT_DELAY_MS from now. ONLY
- * ever called from checkEndState() (and once from init(), for the
- * very first idle moment before any match has happened yet) — every
- * checkEndState() call is itself only ever reached as a consequence
- * of a real match/cascade having just resolved, so this naturally
- * satisfies "the countdown only resets on a real match" without
- * needing to sprinkle calls to this all over the place.
+ * (Re)starts the hint countdown.
  *
  * @returns {void}
  */
@@ -873,53 +714,38 @@ function scheduleHintTimer() {
 }
 
 /**
- * NEW — fires once HINT_DELAY_MS of idle time has passed since the
- * last real match. Finds a legal move (board.js's findHintMove()) and
- * highlights it (render.js's showHintHighlight()). Shows ONCE and
- * then just sits there — nothing re-triggers this on a loop; it only
- * disappears once the player actually acts (any swap attempt causes
- * a re-render, which wipes it for free — see showHintHighlight()'s
- * doc comment), or once the run ends/resets.
+ * Fires once HINT_DELAY_MS of idle time has passed since the last
+ * real match.
  *
  * @returns {void}
  */
 function showHintNow() {
-  if (busy) return; // safety net — shouldn't normally fire while busy/mid-cascade/dialog, but don't show a hint if it somehow does
+  if (busy) return;
   const move = findHintMove(grid, isHyperstarCell, isSpecialSwapPair);
-  if (!move) return; // no legal move at all — the stuck-board game-over path handles that separately
+  if (!move) return;
   showHintHighlight(boardEl, [move.from, move.to]);
 }
 
 /**
  * Resets all game state to a fresh start and renders the initial board.
- * Called whenever a run actually begins — from the "Start Game" button
- * and from the in-game "start over" button. Does NOT touch the start
- * screen / game container visibility — callers decide that.
  *
  * @returns {void}
  */
 function init() {
-  // reset boon-driven state BEFORE progression — calculateScoreTarget()
-  // reads the target-score multiplier, which must be back at 1.0 first
   resetBoonEffects();
   resetProgression(1);
   resetBoons();
   resetTiles();
   resetSpecialGems();
-  resetHistory(); // NEW — clears the panel's backing list for a fresh run
-  resetShop(); // NOTE: only if you've already wired this from the old shop system — otherwise skip
+  resetHistory();
+  resetShop();
   resetBoonShop();
-  resetEvents(); // NEW — alongside every other resetX() call
-  resetCurses(); // NEW — alongside resetEvents()
-  resetConsumables();      // NEW — alongside resetEvents()/resetCurses()
-  resetConsumableShop();   // NEW
+  resetEvents();
+  resetCurses();
+  resetConsumables();
+  resetConsumableShop();
+  resetCustomerService(); // NEW
 
-  // resetTiles() (just above, already called) seeds tileState.blockedCells
-  // with the starting blocked ring; pre-allocate a fully-blocked grid of
-  // the right size, then let rebuildGridRespectingBlocked() fill in every
-  // cell that ledger says should be usable. Two functions, one already
-  // tested by the reshuffle path below, instead of duplicating the
-  // "regen + reapply blocked" logic a second time here.
   grid = Array.from({ length: SIZE }, () => Array(SIZE).fill(BLOCKED));
   rebuildGridRespectingBlocked(grid);
   score = DEFAULT_SCORE;
@@ -927,21 +753,17 @@ function init() {
   selected = null;
   placementMode = null;
   placementShape = null;
-  // Holds the remaining placement phases for the boon currently being
-  // placed (one phase for a plain expand or shrink boon; two — expand
-  // then shrink, per the design doc's "addition first, then removal" —
-  // for a combined risky boon), plus what to call once every phase for
-  // this boon is done.
   tilePlacementQueue = [];
   tilePlacementFinalContinuation = null;
   busy = false;
   comboCount = 0;
   pendingContinuation = null;
   pendingLevelUp = false;
-  pendingEventResult = null; // NEW
-  pendingConsumableEntry = null;     // NEW
-  pendingGoldenTicketTurn = false;   // NEW
-  goldenTicketTurnsRemaining = 0;    // NEW
+  pendingEventResult = null;
+  pendingConsumableEntry = null;
+  pendingGoldenTicketTurn = false;
+  goldenTicketTurnsRemaining = 0;
+  curseRemovalPickerOpen = false; // NEW
 
   scoreEl.textContent = score;
   movesEl.textContent = moves;
@@ -952,33 +774,23 @@ function init() {
   loseDialogEl.classList.add('hidden');
   levelUpDialogEl.classList.add('hidden');
   boonDialogEl.classList.add('hidden');
-
-  loseDialogEl.classList.add('hidden');
-  levelUpDialogEl.classList.add('hidden');
-  boonDialogEl.classList.add('hidden');
-
   shopDialogEl.classList.add('hidden');
-  eventDialogEl.classList.add('hidden'); // NEW — alongside the other dialog resets
+  eventDialogEl.classList.add('hidden');
+  deadlockDialogEl.classList.add('hidden'); // NEW — safety net, same as every other dialog reset
   shopContinuation = null;
 
-  renderSideStats(); // reflect the freshly-reset boon/gem state
+  renderSideStats();
   renderBoardWithInteractions();
-  renderHistoryPanel(); // NEW — clears the panel's DOM to match the reset list
-  scheduleHintTimer(); // NEW — the very first idle moment, before any match has happened yet
-  updateObjectiveBanner(); // NEW — hides the banner on a fresh run (resetEvents() cleared activeEventState)
-  startObjectiveTicker();  // NEW — starts (or restarts) the 1-second countdown tick
-  renderConsumableBelt();  // NEW — clears the belt display for a fresh run
-  updateGoldenTicketStatus(); // NEW — hides the status banner on a fresh run
+  renderHistoryPanel();
+  scheduleHintTimer();
+  updateObjectiveBanner();
+  startObjectiveTicker();
+  renderConsumableBelt();
+  updateGoldenTicketStatus();
 }
 
 /**
- * Floats score-change text above the board for SCORE_POPUP_MS, then
- * fades it back out.
- *
- * Calling this again while a popup is already showing just updates
- * the text and restarts the timer, rather than stacking a second
- * popup or letting the first one's timer cut the new text short —
- * useful during a fast multi-step cascade.
+ * Floats score-change text above the board for SCORE_POPUP_MS.
  *
  * @param {string} text
  * @returns {void}
@@ -987,8 +799,6 @@ function showScorePopup(text) {
   scorePopupEl.textContent = text;
   scorePopupEl.classList.add('visible');
 
-  // Cancel any previous pending fade-out — otherwise an earlier call's
-  // timer could fire mid-cascade and hide text a later call just set.
   if (scorePopupHideTimeout) clearTimeout(scorePopupHideTimeout);
   scorePopupHideTimeout = setTimeout(() => {
     scorePopupEl.classList.remove('visible');
@@ -996,7 +806,7 @@ function showScorePopup(text) {
   }, SCORE_POPUP_MS);
 }
 
-/** mm:ss display for an Elite countdown, floored at 00:00 once time's up. */
+/** mm:ss display for a live countdown. */
 function formatCountdown(msRemaining) {
   const clamped = Math.max(0, msRemaining);
   const totalSeconds = Math.floor(clamped / 1000);
@@ -1006,11 +816,14 @@ function formatCountdown(msRemaining) {
 }
 
 /**
- * NEW — rebuilds the objective banner's text/visibility from
- * activeEventState. Called immediately whenever something relevant
- * changes (a fight starts, a challenge detonates, a level clears) AND
- * once a second via objectiveIntervalId, so the Elite countdown keeps
- * ticking even when nothing else is happening.
+ * Rebuilds the objective banner's text/visibility from activeEventState.
+ *
+ * CHANGED THIS ROUND — the Challenge branch now has TWO shapes:
+ *   - A time-limited challenge (`def.timeLimitMs`, e.g. A Test of
+ *     Endurance) shows a live mm:ss countdown (same convention as
+ *     Elite's time_race banner) plus a note about its decay rate.
+ *   - Anything else (Silent Vein) keeps the original
+ *     "clear N more levels without triggering any special gem" text.
  *
  * @returns {void}
  */
@@ -1035,38 +848,42 @@ function updateObjectiveBanner() {
   } else if (activeEventState.type === EVENT_TYPE.CHALLENGE) {
     const def = getActiveChallengeDef();
     if (!def) { objectiveBannerEl.classList.add('hidden'); return; }
-    objectiveTextEl.textContent = activeEventState.challengeDetonated
-      ? `🔨 ${def.name} — challenge failed (a special gem detonated). Clear the level to move on.`
-      : `🔨 ${def.name} — clear this level without triggering any special gem`;
+
+    if (def.timeLimitMs) {
+      // NEW — a time-limited, decaying challenge (A Test of Endurance).
+      const elapsed = Date.now() - activeEventState.challengeStartedAt;
+      const timeRemaining = activeEventState.challengeTimeLimitMs - elapsed;
+      const decayNote = def.decayEffect
+        ? ` (-${Math.round(def.decayEffect.percent * 100)}% score every ${Math.round(def.decayEffect.intervalMs / 1000)}s)`
+        : '';
+      objectiveTextEl.textContent = `🔨 ${def.name} — reach ${progressionState.scoreTarget} before ${formatCountdown(timeRemaining)}${decayNote}`;
+    } else {
+      const remaining = activeEventState.challengeLevelsRemaining;
+      objectiveTextEl.textContent = activeEventState.challengeDetonated
+        ? `🔨 ${def.name} — challenge failed (a special gem detonated). Clear this level to move on.`
+        : `🔨 ${def.name} — clear ${remaining} more level${remaining === 1 ? '' : 's'} without triggering any special gem`;
+    }
     objectiveBannerEl.classList.remove('hidden');
   } else {
     objectiveBannerEl.classList.add('hidden');
   }
 }
 
-/** (Re)starts the 1-second objective-banner tick. Call once from init(). */
+/** (Re)starts the 1-second objective-banner tick. */
 function startObjectiveTicker() {
   if (objectiveIntervalId) clearInterval(objectiveIntervalId);
   objectiveIntervalId = setInterval(updateObjectiveBanner, 1000);
 }
 
 /**
- * NEW — swaps the event dialog's body over to a single result line +
- * a "Continue" button. Shared tail for every event branch that has
- * flavor text to show before actually moving on (Encounter's both
- * outcomes, Elite's Flee). Elite's "Fight" and Challenge's "Accept"
- * skip this entirely — those close the dialog and start the next
- * level immediately, since the fight/challenge itself IS the next
- * level.
+ * Swaps the event dialog's body over to a single result line + a
+ * "Continue" button.
  *
  * @param {string} text
  * @param {() => void} onContinue
  * @returns {void}
  */
 function showEventResult(text, onContinue) {
-  // NEW — always reset to the default centered layout for this one
-  // Continue button, regardless of whether the dialog that led here
-  // was list-styled (an Encounter) or not (Elite/Challenge).
   eventChoicesEl.className = 'event-choices';
   eventStoryEl.innerHTML = text;
   eventChoicesEl.innerHTML = '';
@@ -1080,35 +897,19 @@ function showEventResult(text, onContinue) {
 }
 
 /**
- * NEW (item 2) — shows an Elite/Challenge's outcome as a proper
- * dialog (title + flavor/result text + a Continue button), reusing
- * the SAME shared #event-dialog every other event already uses.
- * Previously this text only ever reached the History panel — the
- * player had no in-the-moment popup telling them what an Elite fight
- * or Challenge actually resulted in; they'd have to go notice it in
- * the side history log after the fact.
+ * Shows an Elite/Challenge's outcome as a proper dialog.
  *
- * @param {{title: string, text: string}} result - stashed by
- *   applyScoreGain() the moment an Elite/Challenge resolves.
- * @param {() => void} onContinue - what to do once the player
- *   dismisses this dialog (normally: show the "Level Cleared!" dialog next).
+ * @param {{title: string, text: string}} result
+ * @param {() => void} onContinue
  * @returns {void}
  */
 function showEliteChallengeResultDialog(result, onContinue) {
   eventTitleEl.textContent = result.title;
   eventDialogEl.classList.remove('hidden');
-  // showEventResult() builds the body text + Continue button, and
-  // hides the dialog again once clicked — same shared helper every
-  // other event outcome already funnels through.
   showEventResult(result.text, onContinue);
 }
 
-/**
- * NEW — dispatches to the right Encounter dialog builder based on
- * the offer's `kind` (see resources/event/event.js's file header).
- * Each builder owns its own full flow, including calling
- * onContinue() once fully resolved.
- */
+/** Dispatches to the right Encounter dialog builder based on the offer's `kind`. */
 function showEncounterDialog(offer, onContinue) {
   if (offer.kind === 'trade') {
     showGemMoleDialog(offer, onContinue);
@@ -1117,22 +918,21 @@ function showEncounterDialog(offer, onContinue) {
   } else if (offer.kind === 'help_or_absorb') {
     showLostMinerDialog(offer.def, onContinue);
   } else {
-    onContinue(); // unreachable in practice — safety net
+    onContinue();
   }
 }
 
-/** RENAMED from the old showEncounterDialog() — Gem Mole's trade-or-decline flow, unchanged logic. */
+/** Gem Mole's trade-or-decline flow. */
 function showGemMoleDialog(offer, onContinue) {
   const { def, tradeAwayBoon, tradeAwayDef, replacementDef } = offer;
 
-  eventTitleEl.textContent = def.name;
+  eventTitleEl.textContent = formatEventTitle(EVENT_TYPE.ENCOUNTER, def.name);
   eventStoryEl.textContent = def.storyText;
-  // NEW — numbered, single-column list, per design ask (Encounter only).
   eventChoicesEl.className = 'event-choices event-choices--list';
   eventChoicesEl.innerHTML = '';
 
   const acceptBtn = document.createElement('button');
-  acceptBtn.textContent = `1. ${def.acceptLabel}`; // CHANGED — numbered
+  acceptBtn.textContent = `1. ${def.acceptLabel}`;
   acceptBtn.addEventListener('click', () => {
     const { givenName, receivedName } = resolveEncounterAccept(tradeAwayBoon, replacementDef);
     renderSideStats();
@@ -1143,7 +943,7 @@ function showGemMoleDialog(offer, onContinue) {
   });
 
   const declineBtn = document.createElement('button');
-  declineBtn.textContent = `2. ${def.declineLabel}`; // CHANGED — numbered
+  declineBtn.textContent = `2. ${def.declineLabel}`;
   declineBtn.addEventListener('click', () => {
     resolveEncounterDecline();
     addHistoryEntry('event', `Encounter — ${def.name}: ${def.resultDeclineText}`, 'event');
@@ -1156,29 +956,21 @@ function showGemMoleDialog(offer, onContinue) {
   eventDialogEl.classList.remove('hidden');
 }
 
-/**
- * NEW — Fortune's Folly's INITIAL node: story text + 5 bet buttons +
- * the "pay 5% and leave" escape hatch. Every bet button funnels into
- * handleFollyInitialBet(); the pay-and-leave button ends the event
- * immediately without ever gambling.
- */
+/** Fortune's Folly's INITIAL node. */
 function showFortunesFollyDialog(def, onContinue) {
-  eventTitleEl.textContent = def.name;
+  eventTitleEl.textContent = formatEventTitle(EVENT_TYPE.ENCOUNTER, def.name);
   eventStoryEl.textContent = def.storyText;
-  eventChoicesEl.className = 'event-choices event-choices--list'; // NEW
+  eventChoicesEl.className = 'event-choices event-choices--list';
   eventChoicesEl.innerHTML = '';
 
   def.betOptions.forEach((opt, index) => {
     const btn = document.createElement('button');
-    btn.textContent = `${index + 1}. ${opt.label}`; // CHANGED — numbered (1-5)
+    btn.textContent = `${index + 1}. ${opt.label}`;
     btn.addEventListener('click', () => handleFollyInitialBet(def, opt.percent, onContinue));
     eventChoicesEl.appendChild(btn);
   });
 
   const payBtn = document.createElement('button');
-  // CHANGED — numbered as the NEXT number after however many bet
-  // options exist, rather than a hardcoded "6." — stays correct even
-  // if betOptions' length ever changes.
   payBtn.textContent = `${def.betOptions.length + 1}. ${def.payAndLeave.label}`;
   payBtn.addEventListener('click', () => handleFollyPayAndLeave(def, onContinue));
   eventChoicesEl.appendChild(payBtn);
@@ -1186,12 +978,10 @@ function showFortunesFollyDialog(def, onContinue) {
   eventDialogEl.classList.remove('hidden');
 }
 
-/** Resolves the very first bet: deducts the wager immediately, then either shows the win node or ends on a loss. */
+/** Resolves the very first bet. */
 function handleFollyInitialBet(def, percent, onContinue) {
   const { potAmount, won, scoreDelta } = placeFortunesFollyBet(percent, score);
 
-  // The wager leaves score RIGHT NOW, win or lose — see event.js's
-  // doc comment on placeFortunesFollyBet().
   score += scoreDelta;
   scoreEl.textContent = score;
 
@@ -1207,7 +997,7 @@ function handleFollyInitialBet(def, percent, onContinue) {
   }
 }
 
-/** "Pay 5% and leave" — the one path that skips the gamble entirely. */
+/** "Pay 5% and leave". */
 function handleFollyPayAndLeave(def, onContinue) {
   const { amount, scoreDelta } = payFortunesFollyAndLeave(score, def.payAndLeave.percent);
   score += scoreDelta;
@@ -1217,32 +1007,19 @@ function handleFollyPayAndLeave(def, onContinue) {
   showEventResult(def.payAndLeave.resultText, onContinue);
 }
 
-/**
- * The "post-win" node: shown right after ANY win (initial bet or a
- * Double-or-Nothing round), offering Double-or-Nothing again or
- * cashing out. This is the loop — handleFollyDoubleOrNothing() below
- * calls right back into this same function on another win, which is
- * what lets the player keep doubling with no hard cap.
- *
- * @param {object} def
- * @param {number} pot - the CURRENT winnings, already doubled.
- * @param {string} introText - the flavor text to show for how THIS
- *   particular win just happened (differs for the initial win vs. a
- *   Double-or-Nothing win).
- * @param {() => void} onContinue
- */
+/** The "post-win" node for Fortune's Folly. */
 function showFollyPostWin(def, pot, introText, onContinue) {
-  eventTitleEl.textContent = def.name;
+  eventTitleEl.textContent = formatEventTitle(EVENT_TYPE.ENCOUNTER, def.name);
   eventStoryEl.textContent = introText;
-  eventChoicesEl.className = 'event-choices event-choices--list'; // NEW
+  eventChoicesEl.className = 'event-choices event-choices--list';
   eventChoicesEl.innerHTML = '';
 
   const doubleBtn = document.createElement('button');
-  doubleBtn.textContent = `1. ${def.doubleLabel}`; // CHANGED — numbered
+  doubleBtn.textContent = `1. ${def.doubleLabel}`;
   doubleBtn.addEventListener('click', () => handleFollyDoubleOrNothing(def, pot, onContinue));
 
   const cashOutBtn = document.createElement('button');
-  cashOutBtn.textContent = `2. ${def.cashOutLabel}`; // CHANGED — numbered
+  cashOutBtn.textContent = `2. ${def.cashOutLabel}`;
   cashOutBtn.addEventListener('click', () => handleFollyCashOut(def, pot, onContinue));
 
   eventChoicesEl.appendChild(doubleBtn);
@@ -1250,7 +1027,7 @@ function showFollyPostWin(def, pot, introText, onContinue) {
   eventDialogEl.classList.remove('hidden');
 }
 
-/** One Double-or-Nothing flip. A win loops back into showFollyPostWin(); a loss ends the event with no further score change. */
+/** One Double-or-Nothing flip. */
 function handleFollyDoubleOrNothing(def, pot, onContinue) {
   const { won, newPot } = flipFortunesFollyDoubleOrNothing(pot);
 
@@ -1259,17 +1036,13 @@ function handleFollyDoubleOrNothing(def, pot, onContinue) {
     renderHistoryPanel();
     showFollyPostWin(def, newPot, def.doubleOrNothingWinText(newPot), onContinue);
   } else {
-    // NOTE — no score change here at all. The only score deduction
-    // for the WHOLE event happened once, at the initial bet — every
-    // Double-or-Nothing round since then has only ever changed the
-    // in-play pot, never score itself. See event.js's doc comment.
     addHistoryEntry('event', "Fortune's Folly: double or nothing — fortune turns against you. Winnings lost.", 'negative');
     renderHistoryPanel();
     showEventResult(def.doubleOrNothingLoseText, onContinue);
   }
 }
 
-/** Cashes out: credits the current pot to score and ends the event. */
+/** Cashes out. */
 function handleFollyCashOut(def, pot, onContinue) {
   score += pot;
   scoreEl.textContent = score;
@@ -1278,15 +1051,15 @@ function handleFollyCashOut(def, pot, onContinue) {
   showEventResult(def.callItADayText(pot), onContinue);
 }
 
-/** NEW — Lost Miner's three-way choice (help / absorb / leave). */
+/** Lost Miner's three-way choice. */
 function showLostMinerDialog(def, onContinue) {
-  eventTitleEl.textContent = def.name;
+  eventTitleEl.textContent = formatEventTitle(EVENT_TYPE.ENCOUNTER, def.name);
   eventStoryEl.textContent = def.storyText;
-  eventChoicesEl.className = 'event-choices event-choices--list'; // NEW
+  eventChoicesEl.className = 'event-choices event-choices--list';
   eventChoicesEl.innerHTML = '';
 
   const helpBtn = document.createElement('button');
-  helpBtn.textContent = `1. ${def.helpLabel}`; // CHANGED — numbered
+  helpBtn.textContent = `1. ${def.helpLabel}`;
   helpBtn.addEventListener('click', () => {
     const { scoreDelta } = resolveLostMinerHelp(score, def);
     score += scoreDelta;
@@ -1297,7 +1070,7 @@ function showLostMinerDialog(def, onContinue) {
   });
 
   const absorbBtn = document.createElement('button');
-  absorbBtn.textContent = `2. ${def.absorbLabel}`; // CHANGED — numbered
+  absorbBtn.textContent = `2. ${def.absorbLabel}`;
   absorbBtn.addEventListener('click', () => {
     const { grantedBoonDef, curseDef } = resolveLostMinerAbsorb();
     renderSideStats();
@@ -1310,7 +1083,7 @@ function showLostMinerDialog(def, onContinue) {
   });
 
   const leaveBtn = document.createElement('button');
-  leaveBtn.textContent = `3. ${def.leaveLabel}`; // CHANGED — numbered
+  leaveBtn.textContent = `3. ${def.leaveLabel}`;
   leaveBtn.addEventListener('click', () => {
     addHistoryEntry('event', `Lost Miner: ${def.leaveResultText}`, 'event');
     renderHistoryPanel();
@@ -1323,15 +1096,18 @@ function showLostMinerDialog(def, onContinue) {
   eventDialogEl.classList.remove('hidden');
 }
 
-/** Builds and shows the Elite dialog (fight-or-flee). */
+/**
+ * Builds and shows the Elite dialog (fight-or-flee). Warmonger: once
+ * held, the Decline button is struck-through and inert.
+ */
 function showEliteDialog(def, onContinue) {
-  eventTitleEl.textContent = def.name;
+  eventTitleEl.textContent = formatEventTitle(EVENT_TYPE.ELITE, def.name);
   eventStoryEl.textContent = def.storyText;
-  eventChoicesEl.className = 'event-choices event-choices--list'; // NEW
+  eventChoicesEl.className = 'event-choices event-choices--list';
   eventChoicesEl.innerHTML = '';
 
   const fightBtn = document.createElement('button');
-  fightBtn.textContent = `1. ${def.fightLabel}`; // CHANGED — numbered
+  fightBtn.textContent = `1. ${def.fightLabel}`;
   fightBtn.addEventListener('click', () => {
     startEliteFight(def, score);
     targetEl.textContent = progressionState.scoreTarget;
@@ -1343,42 +1119,49 @@ function showEliteDialog(def, onContinue) {
   });
 
   const declineBtn = document.createElement('button');
-  declineBtn.textContent = `2. ${def.declineLabel}`; // CHANGED — numbered
-  declineBtn.addEventListener('click', () => {
-    const result = declineElite(def, score);
-    if (result.scoreDelta) {
-      score += result.scoreDelta;
-      scoreEl.textContent = score;
-    }
-    renderSideStats();
-    const tone = result.scoreDelta < 0 ? 'negative' : 'event';
-    addHistoryEntry('event', `Elite — ${def.name}: ${result.resultText}`, tone);
-    renderHistoryPanel();
-    showEventResult(result.resultText, onContinue);
-  });
+  declineBtn.textContent = `2. ${def.declineLabel}`;
+
+  // Warmonger check.
+  const warmongerHeld = isBoonActive('warmonger');
+  if (warmongerHeld) {
+    declineBtn.classList.add('event-choice-locked');
+    // No click listener at all — the button is visually present but
+    // completely inert, per design ("still shown but not clickable").
+  } else {
+    declineBtn.addEventListener('click', () => {
+      const result = declineElite(def, score);
+      if (result.scoreDelta) {
+        score += result.scoreDelta;
+        scoreEl.textContent = score;
+      }
+      renderSideStats();
+      const tone = result.scoreDelta < 0 ? 'negative' : 'event';
+      addHistoryEntry('event', `Elite — ${def.name}: ${result.resultText}`, tone);
+      renderHistoryPanel();
+      showEventResult(result.resultText, onContinue);
+    });
+  }
 
   eventChoicesEl.appendChild(fightBtn);
   eventChoicesEl.appendChild(declineBtn);
+
+  if (warmongerHeld) {
+    const note = document.createElement('div');
+    note.className = 'event-choice-lock-note';
+    note.textContent = '(Due to Warmonger, you cannot select this option.)';
+    eventChoicesEl.appendChild(note);
+  }
+
   eventDialogEl.classList.remove('hidden');
 }
 
 /**
- * NEW — the single entry point for "an event MIGHT happen right
- * now." Rolls against the chance ladder; if nothing fires, calls
- * onContinue() immediately (the common case). If something fires,
- * shows the matching dialog, which itself calls onContinue() once the
- * player has made their choice (and, for Encounter/Elite-flee, once
- * they've dismissed the result text).
+ * The single entry point for "an event MIGHT happen right now."
  *
- * @param {() => void} onContinue - what happens once the event system
- *   is fully done deciding/resolving (i.e. "actually start the next
- *   level now").
+ * @param {() => void} onContinue
  * @returns {void}
  */
 function attemptEvent(onContinue) {
-  // CHANGED — score is now passed in, since tryTriggerEvent()/
-  // buildEncounterOffer() need it for Fortune's Folly's "score > 0"
-  // eligibility rule.
   const type = tryTriggerEvent(score);
   if (!type) { onContinue(); return; }
 
@@ -1387,8 +1170,6 @@ function attemptEvent(onContinue) {
     if (!offer) { onContinue(); return; }
     showEncounterDialog(offer, onContinue);
   } else if (type === EVENT_TYPE.ELITE) {
-    // CHANGED — pickEliteDef() can now return null (every Elite
-    // already seen this run); guard rather than assume it succeeds.
     const def = pickEliteDef();
     if (!def) { onContinue(); return; }
     showEliteDialog(def, onContinue);
@@ -1401,71 +1182,151 @@ function attemptEvent(onContinue) {
   }
 }
 
-/** Builds and shows the Challenge dialog (accept-or-decline). */
+/**
+ * Builds and shows the Challenge dialog (accept-or-decline).
+ *
+ * CHANGED THIS ROUND:
+ *   - Adventure Junkie: same struck-through/inert Decline treatment
+ *     Warmonger gets on the Elite dialog.
+ *   - Accept now shows `def.acceptResultText` (if the def declares
+ *     one) as a brief flavor beat via showEventResult() before
+ *     actually continuing — Silent Vein has none, so it's skipped
+ *     for that entry (falls straight through like before).
+ *   - Decline now ALSO shows `def.declineText` (if present) via
+ *     showEventResult(), instead of just hiding the dialog silently —
+ *     Silent Vein still has no declineText, so its decline stays a
+ *     silent close (a small, deliberate behavior change; flagged in
+ *     the handoff).
+ */
 function showChallengeDialog(def, onContinue) {
-  eventTitleEl.textContent = def.name;
+  eventTitleEl.textContent = formatEventTitle(EVENT_TYPE.CHALLENGE, def.name);
   eventStoryEl.textContent = def.storyText;
-  eventChoicesEl.className = 'event-choices event-choices--list'; // NEW
+  eventChoicesEl.className = 'event-choices event-choices--list';
   eventChoicesEl.innerHTML = '';
 
   const acceptBtn = document.createElement('button');
-  acceptBtn.textContent = `1. ${def.acceptLabel}`; // CHANGED — numbered
+  acceptBtn.textContent = `1. ${def.acceptLabel}`;
   acceptBtn.addEventListener('click', () => {
     startChallenge(def);
     addHistoryEntry('event', `Challenge — ${def.name}: you accept the challenge!`, 'event');
     renderHistoryPanel();
     updateObjectiveBanner();
-    eventDialogEl.classList.add('hidden');
-    onContinue();
+    if (def.acceptResultText) {
+      showEventResult(def.acceptResultText, onContinue);
+    } else {
+      eventDialogEl.classList.add('hidden');
+      onContinue();
+    }
   });
 
   const declineBtn = document.createElement('button');
-  declineBtn.textContent = `2. ${def.declineLabel}`; // CHANGED — numbered
-  declineBtn.addEventListener('click', () => {
-    declineChallenge();
-    addHistoryEntry('event', `Challenge — ${def.name}: declined.`, 'event');
-    renderHistoryPanel();
-    eventDialogEl.classList.add('hidden');
-    onContinue();
-  });
+  declineBtn.textContent = `2. ${def.declineLabel}`;
+
+  const adventureJunkieHeld = isBoonActive('adventure_junkie');
+  if (adventureJunkieHeld) {
+    declineBtn.classList.add('event-choice-locked');
+  } else {
+    declineBtn.addEventListener('click', () => {
+      declineChallenge();
+      const resultText = def.declineText;
+      addHistoryEntry('event', `Challenge — ${def.name}: ${resultText || 'declined.'}`, 'event');
+      renderHistoryPanel();
+      if (resultText) {
+        showEventResult(resultText, onContinue);
+      } else {
+        eventDialogEl.classList.add('hidden');
+        onContinue();
+      }
+    });
+  }
 
   eventChoicesEl.appendChild(acceptBtn);
   eventChoicesEl.appendChild(declineBtn);
+
+  if (adventureJunkieHeld) {
+    const note = document.createElement('div');
+    note.className = 'event-choice-lock-note';
+    note.textContent = '(Due to Adventure Junkie, you cannot select this option.)';
+    eventChoicesEl.appendChild(note);
+  }
+
   eventDialogEl.classList.remove('hidden');
 }
 
 /**
+ * NEW — Frantic Star's unprompted self-activation check. Call this
+ * exactly once, right when a cascade has genuinely settled.
+ *
+ * @returns {boolean} true if it fired.
+ */
+function maybeTriggerFranticStarSelfActivation() {
+  if (!isBoonActive('frantic_star')) return false;
+  if (Math.random() >= 0.05) return false;
+
+  const result = triggerHyperstarSelfActivation(grid);
+  if (!result) return false;
+
+  const { clearedCells } = result;
+  const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
+  const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
+
+  addHistoryEntry('event', 'A Hyperstar flares up on its own!', 'event');
+  renderHistoryPanel();
+
+  finishSwapActivatedCombo(clearedCells, gained, `Frantic Star: ${signed(gained)}`, [], incidentalCells);
+  return true;
+}
+
+/**
+ * NEW — A Test of Endurance's recurring score decay, checked once
+ * every time a cascade fully settles.
+ *
+ * @returns {void}
+ */
+function applyChallengeDecayIfActive() {
+  const deducted = applyChallengeDecayIfDue(score);
+  if (deducted > 0) {
+    score -= deducted;
+    scoreEl.textContent = score;
+    addHistoryEntry('event', `A Test of Endurance saps ${deducted} score.`, 'negative');
+    renderHistoryPanel();
+  }
+}
+
+/**
+ * NEW — checks every currently-active Decaying Birthstone curse
+ * against this cascade step's clears, and immediately ends the run if
+ * any of them just crossed their threshold.
+ *
+ * @param {{gemType:number,length:number}[]} matchedGroups
+ * @param {{gemType:number,row:number,col:number}[]} incidentalCells
+ * @returns {boolean} true if the run just ended.
+ */
+function checkDecayingBirthstoneLethal(matchedGroups, incidentalCells) {
+  const lethal = recordDecayingBirthstoneActivity(matchedGroups, incidentalCells);
+  if (lethal.length === 0) return false;
+
+  busy = true;
+  loseTitleEl.textContent = DIALOG_TITLES.NO_MOVES;
+  loseMessageEl.textContent = `The Decaying Birthstone consumes you — final score ${score}`;
+  loseDialogEl.classList.remove('hidden');
+  return true;
+}
+
+/**
  * Adds `gained` to the score, updates the display, and advances the
- * level (possibly more than once) if the new score clears the current
- * target. Shared by the normal match flow AND every swap-activated
- * special-gem combo, so level-up handling can't drift out of sync
- * between any of them.
+ * level (possibly more than once) if the new score clears the
+ * current target.
  *
- * NEW — every call now also logs a line into the History panel: the
- * exact same text that would show in the floating score popup, PLUS
- * a separate "level cleared" line if this gain crossed one or more
- * targets. This runs regardless of whether the popup actually shows
- * (it doesn't, on a level-up — the dialog covers the screen instead)
- * so the history panel always has the full record even for moments
- * the popup itself skips.
+ * CHANGED THIS ROUND — Overcharge Essence's per-level gem conversion
+ * is added right alongside Perpetual Boon's per-level gain, same
+ * "checked once per level this while-loop crosses" placement.
  *
- * Does NOT show the level-up dialog itself — callers decide WHEN via
- * `pendingLevelUp`, so a cascade can keep running after crossing a
- * target instead of being interrupted mid-chain-reaction.
- *
- * @param {number} gained - score to add.
- * @param {string} popupText - text to float above the board if this
- *   gain DIDN'T level up (and, now, the text logged to History either way).
+ * @param {number} gained
+ * @param {string} popupText
  * @returns {boolean} true if at least one level was cleared.
  */
 function applyScoreGain(gained, popupText) {
-  // NEW — Golden Ticket: double whatever's being added, AFTER the
-  // normal scoring pipeline has already fully computed `gained` at
-  // the call site (via calculateCascadeStepScore()) — deliberately
-  // the LAST multiplier applied, on top of everything else. Doubling
-  // here (rather than at each of the many call sites) covers every
-  // score-gain path in the game for free — matches, all 7 swap
-  // combos, and consumable clears alike.
   if (goldenTicketTurnsRemaining > 0) {
     gained *= 2;
   }
@@ -1481,43 +1342,57 @@ function applyScoreGain(gained, popupText) {
 
   while (score >= progressionState.scoreTarget) {
     if (activeEventState.type === EVENT_TYPE.ELITE && activeEventState.eliteForLevel === progressionState.level) {
-      // resolveEliteOutcome() takes the LIVE score (already includes
-      // this gain) — Gem Cultivator's ±50% is computed at this exact
-      // moment, per design.
       eliteOutcome = resolveEliteOutcome(score);
       if (eliteOutcome && eliteOutcome.scoreDelta) {
         score += eliteOutcome.scoreDelta;
-        scoreEl.textContent = score; // refresh immediately — a ±50% swing is substantial
+        scoreEl.textContent = score;
       }
     }
-    if (activeEventState.type === EVENT_TYPE.CHALLENGE && activeEventState.challengeForLevel === progressionState.level) {
-      challengeOutcome = resolveChallengeOutcome();
+    // CHANGED — no longer gated on challengeForLevel === progressionState.level;
+    // checkChallengeLevelClear() itself decides whether this level-clear
+    // actually resolves the challenge (last level in the window, or a
+    // detonation) or should keep tracking silently into the next one.
+    if (activeEventState.type === EVENT_TYPE.CHALLENGE) {
+      challengeOutcome = checkChallengeLevelClear();
     }
 
     advanceLevel();
-    // Bonus moves on level-up only mean anything if moves are being
-    // tracked at all — skip the grant when the mechanic is off.
     if (ENABLE_MOVES_LIMIT) {
       moves += LEVEL_UP_BONUS_MOVES;
     }
     leveledUp = true;
 
-    // NEW (item 5) — Crystallized Parasite: a recurring, TRIGGERED drain
-    // (resources/curse/curse.js), not a static stat delta, so it
-    // never goes through applyBoonEffect() at all. Checked fresh on
-    // EVERY level this while-loop crosses — a multi-level jump drains
-    // once per level, compounding on whatever score is left after
-    // the previous drain. "At the end of the level, before any shop
-    // visit" is satisfied for free just by being HERE: this whole
-    // while loop finishes well before proceedAfterBoonPick() ever
-    // gets a chance to open the shop.
+    // NEW — Overcharge Essence: "at the start of the level," convert
+    // 2 random plain gems into a Laser/Discharger, per copy held.
+    const overchargeCount = countActiveBoon('overcharge_essence');
+    if (overchargeCount > 0) {
+      convertRandomPlainGemsToSpecial(grid, overchargeCount * 2);
+      addHistoryEntry('event', 'Overcharge Essence charges up gems on the board.', 'event');
+    }
+
     getActiveCurseDefsByKind('parasite_score_drain').forEach(curseDef => {
       const drained = Math.round(score * curseDef.effect.percent);
-      if (drained <= 0) return; // nothing to drain from a zero/negative score
+      if (drained <= 0) return;
       score -= drained;
       scoreEl.textContent = score;
       addHistoryEntry('event', `${curseDef.name} saps ${drained} score.`, 'negative');
     });
+
+    // NEW — Perpetual Boon: +1% of CURRENT score per copy held, added
+    // at the end of every level cleared, same timing/placement as the
+    // Crystallized Parasite drain right above (both happen "at the
+    // end of the level, before any shop visit" for the exact same
+    // reason — this while loop always finishes before
+    // proceedAfterBoonPick() ever gets a chance to open the shop).
+    const perpetualBoonCount = countActiveBoon('perpetual_boon');
+    if (perpetualBoonCount > 0) {
+      const gainedFromPerpetual = Math.round(score * 0.01 * perpetualBoonCount);
+      if (gainedFromPerpetual > 0) {
+        score += gainedFromPerpetual;
+        scoreEl.textContent = score;
+        addHistoryEntry('event', `Perpetual Boon grants ${signed(gainedFromPerpetual)} score.`, 'positive');
+      }
+    }
   }
 
   const tone = gained > 0 ? 'positive' : gained < 0 ? 'negative' : 'neutral';
@@ -1526,14 +1401,12 @@ function applyScoreGain(gained, popupText) {
   if (eliteOutcome) {
     renderSideStats();
     addHistoryEntry('event', `Elite result: ${eliteOutcome.resultText}`, eliteOutcome.won ? 'positive' : 'negative');
-    // NEW (item 2) — stash for the deferred dialog (resolveMatches()).
-    pendingEventResult = { title: eliteOutcome.name, text: eliteOutcome.resultText };
+    pendingEventResult = { title: formatEventTitle(EVENT_TYPE.ELITE, eliteOutcome.name), text: eliteOutcome.resultText };
   }
   if (challengeOutcome && challengeOutcome.resultText) {
     renderSideStats();
-    addHistoryEntry('event', `Challenge result: ${challengeOutcome.resultText}`, 'positive');
-    // NEW (item 2) — stash for the deferred dialog, same as above.
-    pendingEventResult = { title: challengeOutcome.name, text: challengeOutcome.resultText };
+    addHistoryEntry('event', `Challenge result: ${challengeOutcome.resultText}`, challengeOutcome.succeeded ? 'positive' : 'negative');
+    pendingEventResult = { title: formatEventTitle(EVENT_TYPE.CHALLENGE, challengeOutcome.name), text: challengeOutcome.resultText };
   }
   if (eliteOutcome || challengeOutcome) {
     updateObjectiveBanner();
@@ -1578,23 +1451,15 @@ function startGame() {
 }
 
 /**
- * Click/tap handler for a board cell. Handles the select/deselect/swap
- * state machine.
+ * Click/tap handler for a board cell.
  *
- * Only ever called for an actual tap (no significant pointer
- * movement) — a press-and-drag gesture instead goes through
- * onCellDragSwap() below, entirely bypassing the `selected` state
- * machine here.
- *
- * @param {number} r - row of the clicked cell.
- * @param {number} c - column of the clicked cell.
+ * @param {number} r
+ * @param {number} c
  * @returns {void}
  */
 function onCellClick(r, c) {
   if (busy) return;
 
-  // NEW — a target-requiring consumable is armed; this click IS its
-  // target, not a normal select/swap.
   if (pendingConsumableEntry) {
     handleConsumableTargetClick(r, c);
     return;
@@ -1606,6 +1471,10 @@ function onCellClick(r, c) {
   }
 
   if (grid[r][c] === BLOCKED) return;
+  // NEW — Obsidian can never be selected or swapped; it can only
+  // leave the board by falling off the bottom row on its own (see
+  // gameplay/obsidian.js).
+  if (grid[r][c] === OBSIDIAN) return;
 
   if (!selected) {
     selected = [r, c];
@@ -1631,24 +1500,24 @@ function onCellClick(r, c) {
   attemptSwap(sr, sc, r, c);
 }
 
-
 /**
- * Drag/swipe handler for a board cell. Fired by render.js when a
- * press-and-drag gesture on a gem cell resolves into a swap attempt.
+ * Drag/swipe handler for a board cell.
  *
- * @param {number} r1 - row of the cell the drag started on.
- * @param {number} c1 - column of the cell the drag started on.
- * @param {number} r2 - row of the cell the drag points toward.
- * @param {number} c2 - column of the cell the drag points toward.
+ * @param {number} r1
+ * @param {number} c1
+ * @param {number} r2
+ * @param {number} c2
  * @returns {void}
  */
 function onCellDragSwap(r1, c1, r2, c2) {
   if (busy) return;
   if (placementMode) return;
-  if (pendingConsumableEntry) return; // NEW — a drag shouldn't count as this consumable's target click
+  if (pendingConsumableEntry) return;
 
   if (r2 < 0 || r2 >= SIZE || c2 < 0 || c2 >= SIZE) return;
   if (grid[r1][c1] === BLOCKED || grid[r2][c2] === BLOCKED) return;
+  // NEW — same Obsidian guard as onCellClick(), for the drag path.
+  if (grid[r1][c1] === OBSIDIAN || grid[r2][c2] === OBSIDIAN) return;
 
   selected = null;
   updateSelectedVisual(boardEl, selected);
@@ -1746,12 +1615,8 @@ function advanceTilePlacement() {
 }
 
 /**
- * Shared tail-end for every swap-ACTIVATED special-gem combo. Always
- * continues the cascade — a swap-activated combo's cleared cells
- * still collapse/refill and can still chain into further matches, so
- * interrupting here would cut that short. If this step crossed a
- * target, `pendingLevelUp` is set instead, and resolveMatches() shows
- * the dialog once the whole cascade has fully settled.
+ * Shared tail-end for every swap-ACTIVATED special-gem combo,
+ * including Frantic Star's self-activation.
  *
  * @param {[number, number][]} clearedCells
  * @param {number} gained
@@ -1759,11 +1624,9 @@ function advanceTilePlacement() {
  * @returns {void}
  */
 function finishSwapActivatedCombo(clearedCells, gained, popupText, matchedGroups = [], incidentalCells = []) {
-  // NEW — every one of the 7 swap-activated combos IS, by definition,
-  // a "detonation" for the no-detonation Challenge. Marking it once
-  // here (rather than in all 7 handler functions) covers every case.
   markChallengeDetonation();
-  recordEliteGemActivity(matchedGroups, incidentalCells, 1); // every combo is a single "step" — comboCount 1
+  recordEliteGemActivity(matchedGroups, incidentalCells, 1);
+  if (checkDecayingBirthstoneLethal(matchedGroups, incidentalCells)) return;
   updateObjectiveBanner();
 
   if (ENABLE_MOVES_LIMIT) {
@@ -1781,18 +1644,8 @@ function finishSwapActivatedCombo(clearedCells, gained, popupText, matchedGroups
 }
 
 /**
- * Hyperstar + a plain normal gem — classic same-color wipe. As of
- * this round, Laser and Discharger each have their own dedicated
- * combo (see below) — this function is now only reached for an
- * ordinary gem with no special overlay.
- *
- * FIXED — the Hyperstar's own cell used to get folded into the
- * targetGemType matched-group's `length`, which scored IT using the
- * WIPED color's base value/multiplier instead of its own (whatever
- * color the Hyperstar itself actually happened to be sitting on).
- * Now it's pulled out and scored separately, as its own incidental
- * cell, using its real underlying gem type — same treatment any
- * other incidentally-cleared cell gets.
+ * Hyperstar + a plain normal gem — classic same-color wipe. Frantic
+ * Star: if held, also wipes a second random gem color.
  *
  * @param {number} hyperRow
  * @param {number} hyperCol
@@ -1800,7 +1653,8 @@ function finishSwapActivatedCombo(clearedCells, gained, popupText, matchedGroups
  * @returns {void}
  */
 function handleHyperstarSingle(hyperRow, hyperCol, targetGemType) {
-  const clearedCells = triggerHyperstarSingle(grid, hyperRow, hyperCol, targetGemType);
+  const franticStarActive = isBoonActive('frantic_star');
+  const clearedCells = triggerHyperstarSingle(grid, hyperRow, hyperCol, targetGemType, franticStarActive);
   const hyperstarOwnGemType = grid[hyperRow][hyperCol];
   const wipedCells = clearedCells.filter(([r, c]) => !(r === hyperRow && c === hyperCol));
 
@@ -1808,12 +1662,12 @@ function handleHyperstarSingle(hyperRow, hyperCol, targetGemType) {
   const incidentalCells = [{ gemType: hyperstarOwnGemType, row: hyperRow, col: hyperCol }];
 
   const gained = calculateCascadeStepScore({ matchedGroups, incidentalCells, comboCount: 1 });
-  finishSwapActivatedCombo(clearedCells, gained, `Hyperstar Wipe: ${signed(gained)}`, matchedGroups, incidentalCells);
+  const label = franticStarActive ? 'Frantic Hyperstar Wipe' : 'Hyperstar Wipe';
+  finishSwapActivatedCombo(clearedCells, gained, `${label}: ${signed(gained)}`, matchedGroups, incidentalCells);
 }
 
 /**
- * Hyperstar + Laser — convert-and-detonate combo. Scored as
- * incidental cells (mixed colors under each detonated laser's blast).
+ * Hyperstar + Laser — convert-and-detonate combo.
  *
  * @param {number} hyperRow
  * @param {number} hyperCol
@@ -1828,9 +1682,7 @@ function handleHyperstarLaserCombo(hyperRow, hyperCol, laserColorType) {
 }
 
 /**
- * NEW — Hyperstar + Discharger — convert-and-detonate combo, mirrors
- * handleHyperstarLaserCombo() exactly, just converting to Dischargers.
- * Scored as incidental cells, same reasoning.
+ * Hyperstar + Discharger — convert-and-detonate combo.
  *
  * @param {number} hyperRow
  * @param {number} hyperCol
@@ -1845,8 +1697,7 @@ function handleHyperstarDischargerCombo(hyperRow, hyperCol, dischargerColorType)
 }
 
 /**
- * Hyperstar + Hyperstar — clears the whole board. Mixed colors, same
- * incidental-cell scoring reasoning as above.
+ * Hyperstar + Hyperstar — clears the whole board.
  *
  * @returns {void}
  */
@@ -1861,8 +1712,8 @@ function handleHyperstarDouble() {
  * Laser + Laser — combined row+column blast through the swap's
  * destination cell.
  *
- * @param {number} originRow - destination row (r2 from attemptSwap).
- * @param {number} originCol - destination col (c2 from attemptSwap).
+ * @param {number} originRow
+ * @param {number} originCol
  * @returns {void}
  */
 function handleLaserCombo(originRow, originCol) {
@@ -1873,13 +1724,11 @@ function handleLaserCombo(originRow, originCol) {
 }
 
 /**
- * NEW — Discharger + Laser — clears 3 rows or 3 columns (matching the
- * laser's orientation), centered on wherever the Discharger itself
- * landed. Mixed colors, scored as incidental cells.
+ * Discharger + Laser — clears 3 rows or 3 columns.
  *
  * @param {number} dischargerRow
  * @param {number} dischargerCol
- * @param {string} laserOrientation - SPECIAL_GEM_TYPE.LASER_ROW or LASER_COL.
+ * @param {string} laserOrientation
  * @returns {void}
  */
 function handleDischargerLaserCombo(dischargerRow, dischargerCol, laserOrientation) {
@@ -1890,12 +1739,10 @@ function handleDischargerLaserCombo(dischargerRow, dischargerCol, laserOrientati
 }
 
 /**
- * NEW — Discharger + Discharger — the row+column+diagonals burst
- * (the old Star Gem effect), centered on the swap's destination.
- * Mixed colors, scored as incidental cells.
+ * Discharger + Discharger — the row+column+diagonals burst.
  *
- * @param {number} originRow - destination row (r2 from attemptSwap).
- * @param {number} originCol - destination col (c2 from attemptSwap).
+ * @param {number} originRow
+ * @param {number} originCol
  * @returns {void}
  */
 function handleDischargerDouble(originRow, originCol) {
@@ -1908,39 +1755,17 @@ function handleDischargerDouble(originRow, originCol) {
 /**
  * Attempts to swap two adjacent cells.
  *
- * Checked in this priority order once the swap has landed:
- *   1. Hyperstar + Hyperstar    -> wipe the whole board
- *   2. Hyperstar + Laser        -> convert-and-detonate (lasers)
- *   3. Hyperstar + Discharger   -> convert-and-detonate (dischargers)
- *   4. Hyperstar + a plain gem  -> classic same-color wipe
- *   5. Laser + Laser            -> combined row+column blast
- *   6. Discharger + Laser       -> 3 rows or 3 columns
- *   7. Discharger + Discharger  -> row+column+diagonals burst
- *   8. otherwise                -> normal findMatches() check
- *
- * Cases 1-7 are all swap-ACTIVATED — they happen because of WHAT was
- * swapped together, not because of any pattern the swap happened to
- * form — so none of them ever call findMatches() at all.
- *
- * Called identically whether the swap came from the click-select flow
- * (onCellClick) or the drag flow (onCellDragSwap) — this function has
- * no idea which one triggered it, by design.
- *
- * @param {number} r1 - row of the first cell.
- * @param {number} c1 - column of the first cell.
- * @param {number} r2 - row of the second cell.
- * @param {number} c2 - column of the second cell.
+ * @param {number} r1
+ * @param {number} c1
+ * @param {number} r2
+ * @param {number} c2
  * @returns {void}
  */
 function attemptSwap(r1, c1, r2, c2) {
   busy = true;
   selected = null;
-  pendingGoldenTicketTurn = true; // NEW — this IS a real player-initiated swap attempt
+  pendingGoldenTicketTurn = true;
 
-  // Cancel any pending hint countdown the moment the player commits
-  // to a swap — it should never fire mid-animation/cascade. It's NOT
-  // rescheduled here (only checkEndState() does that) — per design,
-  // an invalid/reverted swap does not restart the countdown.
   if (hintTimeoutId) {
     clearTimeout(hintTimeoutId);
     hintTimeoutId = null;
@@ -1966,13 +1791,11 @@ function attemptSwap(r1, c1, r2, c2) {
     const dischargerAt1 = preSwapSpecial1 === SPECIAL_GEM_TYPE.DISCHARGER;
     const dischargerAt2 = preSwapSpecial2 === SPECIAL_GEM_TYPE.DISCHARGER;
 
-    // --- case 1: Hyperstar + Hyperstar -> destroy the entire board ---
     if (hyperAt1 && hyperAt2) {
       handleHyperstarDouble();
       return;
     }
 
-    // --- case 2: Hyperstar + Laser -> convert-and-detonate (lasers) ---
     if ((hyperAt1 && laserAt2) || (hyperAt2 && laserAt1)) {
       const hyperRow = hyperAt1 ? r2 : r1;
       const hyperCol = hyperAt1 ? c2 : c1;
@@ -1981,7 +1804,6 @@ function attemptSwap(r1, c1, r2, c2) {
       return;
     }
 
-    // --- case 3 (NEW): Hyperstar + Discharger -> convert-and-detonate (dischargers) ---
     if ((hyperAt1 && dischargerAt2) || (hyperAt2 && dischargerAt1)) {
       const hyperRow = hyperAt1 ? r2 : r1;
       const hyperCol = hyperAt1 ? c2 : c1;
@@ -1990,7 +1812,6 @@ function attemptSwap(r1, c1, r2, c2) {
       return;
     }
 
-    // --- case 4: Hyperstar + a plain normal gem -> classic same-color wipe ---
     if (hyperAt1 || hyperAt2) {
       const hyperRow = hyperAt1 ? r2 : r1;
       const hyperCol = hyperAt1 ? c2 : c1;
@@ -1999,17 +1820,11 @@ function attemptSwap(r1, c1, r2, c2) {
       return;
     }
 
-    // --- case 5: Laser + Laser -> combined row+column blast ---
     if (laserAt1 && laserAt2) {
       handleLaserCombo(r2, c2);
       return;
     }
 
-    // --- case 6 (NEW): Discharger + Laser -> 3 rows or 3 columns
-    // (matching the laser's orientation), centered on wherever the
-    // Discharger itself ended up — this combo is asymmetric (like
-    // the Hyperstar ones above), so it can't just use the swap
-    // destination blindly the way Laser+Laser can. ---
     if ((dischargerAt1 && laserAt2) || (dischargerAt2 && laserAt1)) {
       const dischargerRow = dischargerAt1 ? r2 : r1;
       const dischargerCol = dischargerAt1 ? c2 : c1;
@@ -2018,19 +1833,15 @@ function attemptSwap(r1, c1, r2, c2) {
       return;
     }
 
-    // --- case 7 (NEW): Discharger + Discharger -> row+column+diagonals
-    // burst, centered on the swap destination (symmetric, like Laser+Laser) ---
     if (dischargerAt1 && dischargerAt2) {
       handleDischargerDouble(r2, c2);
       return;
     }
 
-    // --- case 8: nothing special activated by this swap — fall back
-    // to the normal match-detection flow, exactly as before ---
     const matched = findMatches(grid, isHyperstarCell);
 
     if (!hasAnyMatch(matched)) {
-      pendingGoldenTicketTurn = false; // NEW — invalid swap, this attempt never becomes a "completed turn"
+      pendingGoldenTicketTurn = false;
       messageEl.textContent = MESSAGES.INVALID_SWAP;
       const revertPitch = computeCellPitch(boardEl);
       swap(grid, r1, c1, r2, c2);
@@ -2039,16 +1850,6 @@ function attemptSwap(r1, c1, r2, c2) {
       animateSwap(boardEl, r1, c1, r2, c2, revertPitch);
       setTimeout(() => {
         busy = false;
-        // NEW (item 1) — restart the hint countdown once input is
-        // live again. Previously the timer was cancelled at the very
-        // top of attemptSwap() but never rescheduled here, so ANY
-        // failed/invalid swap permanently killed the hint until the
-        // next real match succeeded — the player had to stay
-        // completely still (not even attempt a bad swap) for a hint
-        // to ever show up again. Now a failed attempt just restarts
-        // the clock fresh, exactly like a successful match does via
-        // checkEndState() — "regardless of any attempt to fail
-        // match," per the ask.
         scheduleHintTimer();
       }, SWAP_ANIM_MS);
       return;
@@ -2060,10 +1861,6 @@ function attemptSwap(r1, c1, r2, c2) {
     }
     messageEl.textContent = '';
     comboCount = 0;
-    // Pass this swap's two cells through so THIS FIRST cascade step
-    // can spawn any resulting special gem at whichever swapped cell
-    // ended up part of the match, instead of the old fixed
-    // middle/intersection rule.
     resolveMatches([[r1, c1], [r2, c2]]);
   }, SWAP_ANIM_MS);
 }
@@ -2071,27 +1868,23 @@ function attemptSwap(r1, c1, r2, c2) {
 /**
  * Recursive-by-timeout loop: pop current matches, award combo-scaled
  * score, check for a level-up, collapse+refill, then check for new
- * matches caused by the fall (cascades). Repeats until the board is
- * stable, then hands off to checkEndState().
+ * matches caused by the fall (cascades).
  *
- * @param {[[number, number], [number, number]] | null} [swapCells] -
- *   the two cells the player just swapped, ONLY on the very first
- *   call following a real swap (see attemptSwap()'s fallback branch —
- *   the ONLY call site that ever passes this). Every deeper cascade
- *   link is scheduled via `setTimeout(resolveMatches, ...)` with no
- *   arguments, so it naturally defaults back to null here — a
- *   gravity-caused cascade link has no "swap" to speak of, so it
- *   always falls back to the old middle/intersection spawn rule (see
- *   special_gem.js's classifyGroup()/pickSpawnCell()).
+ * CHANGED THIS ROUND — the settle branch now ALSO runs
+ * applyChallengeDecayIfActive() (A Test of Endurance) as the very
+ * first thing, before Frantic Star's self-activation check.
+ *
+ * @param {[[number, number], [number, number]] | null} [swapCells]
  * @returns {void}
  */
 function resolveMatches(swapCells = null) {
   const matched = findMatches(grid, isHyperstarCell);
 
   if (!hasAnyMatch(matched)) {
-    // NEW — this whole swap's cascade just fully settled. If it was a
-    // real player swap (not a consumable action), that's exactly one
-    // Golden Ticket turn spent, win or lose.
+    applyChallengeDecayIfActive();
+
+    if (maybeTriggerFranticStarSelfActivation()) return;
+
     if (pendingGoldenTicketTurn) {
       pendingGoldenTicketTurn = false;
       consumeGoldenTicketTurnIfActive();
@@ -2100,12 +1893,6 @@ function resolveMatches(swapCells = null) {
     if (pendingLevelUp) {
       pendingLevelUp = false;
 
-      // NEW (item 2) — if an Elite/Challenge resolved as part of
-      // getting to this level-up, show ITS result dialog FIRST
-      // (flavor text + outcome), and only open the "Level Cleared!"
-      // dialog once the player dismisses that. Keeps the two
-      // readable as separate beats ("this happened, AND ALSO you
-      // leveled up") instead of silently skipping straight past it.
       const eventResult = pendingEventResult;
       pendingEventResult = null;
 
@@ -2130,14 +1917,21 @@ function resolveMatches(swapCells = null) {
   }
   comboCount++;
 
-  const { clearedCells, spawns, matchedGroups, incidentalCells } = resolveSpecialGems(grid, matched, swapCells);
-  // NEW — Elite gem-tracking runs on EVERY cascade step, not just
-  // detonating ones.
+  const { clearedCells, spawns, matchedGroups, incidentalCells, obsidianSpawn } = resolveSpecialGems(grid, matched, swapCells);
+
+  // NEW — log an Obsidian spawn to the history panel, if one happened
+  // this step (purely informational; no dedicated pop animation for
+  // it — it just quietly appears the next time the board re-renders).
+  if (obsidianSpawn) {
+    addHistoryEntry('event', 'An Obsidian gem forms on the board.', 'event');
+  }
+
   recordEliteGemActivity(matchedGroups, incidentalCells, comboCount);
+  // NEW — Decaying Birthstone lethal check, same call-site convention
+  // as recordEliteGemActivity() right above.
+  if (checkDecayingBirthstoneLethal(matchedGroups, incidentalCells)) return;
   updateObjectiveBanner();
-  // NEW — a non-empty incidentalCells list means a Laser/Discharger's
-  // PASSIVE blast fired as part of this match/chain-reaction — that's
-  // a detonation too, distinct from the swap-activated combos above.
+
   if (incidentalCells.length > 0) {
     markChallengeDetonation();
     updateObjectiveBanner();
@@ -2157,48 +1951,39 @@ function resolveMatches(swapCells = null) {
 
 /**
  * Clears matched cells, lets gravity + refill run, and schedules the
- * next cascade check. Split out from resolveMatches() so the
- * level-up dialog can defer this step until the player is ready to
- * continue, instead of it always firing on a timer.
+ * next cascade check.
  *
- * This function is deliberately two nested setTimeouts, not one:
- *   1. MATCH_CLEAR_DELAY_MS   — waits for the "pop" animation
- *      (gems.css, .matched) to finish playing before the DOM is
- *      rebuilt out from under it. If we cleared/rebuilt immediately,
- *      the pop animation would get cut off mid-play.
- *   2. CASCADE_CHECK_DELAY_MS — a short pause AFTER the board has
- *      re-rendered post-collapse, purely so a cascade match doesn't
- *      pop into view instantly. Purely cosmetic pacing, not needed
- *      for correctness.
+ * CHANGED THIS ROUND — after every collapseAndFill() pass, also runs
+ * settleObsidianOffBoard(): any Obsidian gem that ended up at the
+ * true bottom of its column crumbles off the board, and everything
+ * above it re-settles.
  *
- * @param {[number, number][]} clearedCells - flat list of [row, col]
- *   pairs to clear, as returned by resolveSpecialGems() (normal match
- *   path) or triggerHypercube() (swap-activation path). NOT a
- *   boolean grid — do not confuse with findMatches()'s return shape.
+ * @param {[number, number][]} clearedCells
  * @returns {void}
  */
 function continueCascadeAfterMatch(clearedCells) {
-  // wait out the pop animation before touching the grid/DOM again
   setTimeout(() => {
-    // mark cleared cells transient (-1), not BLOCKED — collapseAndFill()
-    // will fill these back in below
     clearedCells.forEach(([r, c]) => { grid[r][c] = -1; });
 
-    // wipe the overlay BEFORE gravity, so no stale special flag
-    // carries onto whatever gem falls into that spot
     clearSpecialGems(clearedCells);
 
-    // gravity + refill; overlay rides along as a parallel grid
     collapseAndFill(grid, [specialGemState.grid]);
+
+    // NEW — Obsidian "falls off the board" cleanup, right after the
+    // normal gravity pass.
+    const obsidianFellOff = settleObsidianOffBoard(grid, [specialGemState.grid]);
+    if (obsidianFellOff) {
+      addHistoryEntry('event', 'An Obsidian gem crumbles off the edge of the board.', 'event');
+      renderHistoryPanel();
+    }
+
     renderBoardWithInteractions();
-    // short cosmetic pause, then check for a cascade
     setTimeout(resolveMatches, CASCADE_CHECK_DELAY_MS);
   }, MATCH_CLEAR_DELAY_MS);
 }
 
 /**
- * Shows the "Level Cleared!" dialog and stashes the callback that
- * finishes up once the player has moved on.
+ * Shows the "Level Cleared!" dialog.
  *
  * @param {() => void} onContinue
  * @returns {void}
@@ -2209,13 +1994,44 @@ function showLevelUpDialog(onContinue) {
 }
 
 /**
- * Builds and shows the pick-one-of-three boon dialog.
+ * NEW — Booner's stacking chance of an extra boon offer. Checked ONCE
+ * right after the FIRST offer's pick resolves (never re-checked for
+ * the bonus offer itself — see showBoonDialog()'s `isBonusOffer` flag
+ * — so at most one bonus offer is ever granted per level, regardless
+ * of how many Booner copies are held; only the CHANCE of getting that
+ * one bonus offer scales with copies, additively (+25% per copy, same
+ * convention Entropy/Luminous/Explosive Shard already use).
  *
- * @param {() => void} onContinue - called after a boon is picked (or
- *   immediately, if nothing was available to offer).
+ * @param {() => void} onDone - called once the (possible) bonus pick
+ *   has fully resolved, or immediately if it didn't trigger at all.
  * @returns {void}
  */
-function showBoonDialog(onContinue) {
+function maybeGrantBoonerBonusOffer(onDone) {
+  const boonerCount = countActiveBoon('booner');
+  if (boonerCount === 0 || Math.random() >= 0.25 * boonerCount) {
+    onDone();
+    return;
+  }
+
+  addHistoryEntry('event', 'Booner grants a bonus boon offer!', 'event');
+  renderHistoryPanel();
+  showBoonDialog(onDone, true); // isBonusOffer=true — never re-rolls Booner itself
+}
+
+/**
+ * Builds and shows the pick-one-of-three boon dialog.
+ *
+ * CHANGED THIS ROUND — new `isBonusOffer` parameter (default false).
+ * A normal (non-bonus) pick rolls Booner's bonus-offer chance right
+ * after resolving; a bonus offer (isBonusOffer=true) skips that
+ * check entirely, so bonus offers can never chain into further bonus
+ * offers.
+ *
+ * @param {() => void} onContinue
+ * @param {boolean} [isBonusOffer=false]
+ * @returns {void}
+ */
+function showBoonDialog(onContinue, isBonusOffer = false) {
   const offer = generateBoonOffer(3);
 
   if (offer.length === 0) {
@@ -2226,10 +2042,6 @@ function showBoonDialog(onContinue) {
   boonChoicesEl.innerHTML = '';
   offer.forEach(def => {
     const card = document.createElement('div');
-    // CHANGED — rarity modifier class added here, e.g.
-    // "boon-card boon-card--epic". This single class is what drives
-    // both the card's border color AND its footer badge color (see
-    // dialog.css's .boon-card--<rarity> rules).
     card.className = `boon-card boon-card--${def.rarity}`;
 
     const gemDef = def.effect?.gem ? ALL_GEM_CATALOG.find(g => g.id === def.effect.gem) : null;
@@ -2237,9 +2049,6 @@ function showBoonDialog(onContinue) {
       ? `<img class="boon-card-gem-icon" src="css/model/svg/${gemDef.file}" alt="${gemDef.name}">`
       : '';
 
-    // CHANGED — description now carries its own class (boon-card-desc)
-    // so it can flex-grow to fill the taller card, plus a new footer
-    // div showing the rarity as a small uppercase text badge.
     card.innerHTML = `
       <div class="boon-card-header">
         ${iconHtml}
@@ -2251,36 +2060,23 @@ function showBoonDialog(onContinue) {
       </div>
     `;
     card.addEventListener('click', () => {
-      // CHANGED — capture the activeBoon entry and attach its
-      // appliedEffect, so the event system (trade/loss) can reverse
-      // this EXACT pick later. Every boon-granting call site in the
-      // game now follows this same two-line pattern.
       const activeBoon = pickBoon(def.id);
       activeBoon.appliedEffect = applyBoonEffect(def);
       renderSideStats();
       boonDialogEl.classList.add('hidden');
 
-      // NEW — record the pick in the History panel. Tone follows the
-      // boon's OWN type rather than trying to re-derive positive/
-      // negative from its numbers: a RISKY_BUFF (Frenzy, the 4 global
-      // boons) always carries BOTH an upside and a downside at once,
-      // so no single sign correctly describes it — those stay
-      // 'neutral'. CURSE (currently only the board-shrink boon) is a
-      // pure downside. Plain BUFF is a pure upside.
       const boonTone = def.type === BOON_TYPE.CURSE ? 'negative'
         : def.type === BOON_TYPE.BUFF ? 'positive'
         : 'neutral';
-      // CHANGED — boon picks always use their own dedicated 'boon'
-      // tone/color now (violet), instead of borrowing score's
-      // green/red off BOON_TYPE. Reusing green/red made a buff pick
-      // visually indistinguishable from a plain positive score line —
-      // the boon's own name/description already say buff-vs-curse;
-      // the color now just marks "this line is a boon pick," free or
-      // bought alike (see buyBoonFromShop() below).
       addHistoryEntry('boon', `Boon picked: ${def.name} — ${def.description}`, 'boon');
       renderHistoryPanel();
 
-      proceedAfterBoonPick(def, onContinue);
+      const finishThisPick = () => proceedAfterBoonPick(def, onContinue);
+      if (isBonusOffer) {
+        finishThisPick();
+      } else {
+        maybeGrantBoonerBonusOffer(finishThisPick);
+      }
     });
 
     boonChoicesEl.appendChild(card);
@@ -2291,18 +2087,10 @@ function showBoonDialog(onContinue) {
 
 /**
  * Decides what happens immediately after a FREE level-up boon has
- * been picked and applied: open the shop (if the level just cleared
- * is a multiple of SHOP_LEVEL_INTERVAL), then — either way — run
- * whatever board-shape placement or cascade-resume step was already
- * queued up behind the boon pick.
+ * been picked and applied.
  *
- * Order: free pick always happens first, the shop (if any) opens
- * second, and any board-shape placement for THIS boon runs last,
- * once the shop is closed.
- *
- * @param {object} def - the boon just picked (from the free dialog).
- * @param {() => void} onContinue - what resolveMatches()'s deferred
- *   level-up flow is ultimately waiting to run once everything is done.
+ * @param {object} def
+ * @param {() => void} onContinue
  * @returns {void}
  */
 function proceedAfterBoonPick(def, onContinue) {
@@ -2311,11 +2099,6 @@ function proceedAfterBoonPick(def, onContinue) {
     def.effect.kind === 'board_shrink' ||
     def.effect.kind === 'board_expand_and_shrink';
 
-  // NEW — the real "start the next level" step now goes through the
-  // event system first. Every existing continuation
-  // (afterShop / startTilePlacement's own onContinue) now points HERE
-  // instead of directly at the caller's onContinue — this is the "one
-  // check, right before the next level begins" hook point.
   const continueToNextLevel = () => attemptEvent(onContinue);
 
   const afterShop = () => {
@@ -2335,8 +2118,10 @@ function proceedAfterBoonPick(def, onContinue) {
 }
 
 /**
- * Opens the boon shop: rolls a fresh offer and shows the dialog.
- * Stashes `onContinue` so Leave can resume whatever was paused.
+ * Opens the boon shop.
+ *
+ * CHANGED THIS ROUND — also resets/re-rolls the Customer Service
+ * section for this fresh visit.
  *
  * @param {() => void} onContinue
  * @returns {void}
@@ -2345,18 +2130,27 @@ function openShopDialog(onContinue) {
   currentShopTier = shopTierForLevel(progressionState.level - 1);
   shopEntryScore = score;
   rollBoonShopOffer();
-  rollConsumableShopOffer(); // NEW
+  rollConsumableShopOffer();
+  resetCustomerServiceVisit(); // NEW
+  rollLimitedEditionBoonOffer(); // NEW
+  curseRemovalPickerOpen = false; // NEW
   shopContinuation = onContinue;
   renderShopDialog();
   shopDialogEl.classList.remove('hidden');
 }
 
 /**
- * Rebuilds the shop's card grid from boonShopState.offer, from
- * scratch, every time — same "just rebuild it" convention as
- * renderSideStats()/renderHistoryPanel(). Called on open and again
- * after every purchase (price never changes mid-visit, but a card's
- * bought/affordable state does).
+ * Rebuilds the shop's card grid.
+ *
+ * CHANGED THIS ROUND:
+ *   - Boon cards now use the SAME `.boon-card` markup/styling the
+ *     level-up dialog's cards use, with the price added into the
+ *     existing footer row (alongside the rarity badge).
+ *   - Consumable cards are now belt-style squares with a hover
+ *     tooltip, price shown below (same convention/location as before).
+ *   - New Customer Service section, rendered via
+ *     renderCustomerServiceSection().
+ *   - Every price now goes through applyVipDiscount().
  *
  * @returns {void}
  */
@@ -2365,14 +2159,15 @@ function renderShopDialog() {
   shopChoicesEl.innerHTML = '';
 
   boonShopState.offer.forEach(def => {
-    const price = calculateBoonPrice(def.rarity, currentShopTier, shopEntryScore);
+    const rawPrice = calculateBoonPrice(def.rarity, currentShopTier, shopEntryScore);
+    const price = applyVipDiscount(rawPrice);
     const alreadyBought = isBoonPurchasedThisVisit(def.id);
     const canAfford = score >= price;
 
     const card = document.createElement('div');
-    // CHANGED — rarity class added, same convention as the boon
-    // dialog's cards above.
-    card.className = `shop-card shop-card--${def.rarity}`;
+    // CHANGED — reuses the level-up dialog's own card class instead
+    // of the old smaller `.shop-card`.
+    card.className = `boon-card boon-card--${def.rarity}`;
     if (alreadyBought) card.classList.add('shop-card--bought');
     else if (!canAfford) card.classList.add('shop-card--unaffordable');
 
@@ -2386,13 +2181,13 @@ function renderShopDialog() {
         ${iconHtml}
         <h3>${def.name}</h3>
       </div>
-      <p>${def.description}</p>
-      <div class="shop-card-price">${alreadyBought ? 'Purchased' : `${price} pts`}</div>
+      <p class="boon-card-desc">${def.description}</p>
+      <div class="boon-card-footer">
+        <span class="boon-card-rarity">${def.rarity}</span>
+        <span class="shop-card-price">${alreadyBought ? 'Purchased' : `${price} pts`}</span>
+      </div>
     `;
 
-    // Only wire a click when the card is actually purchasable — an
-    // already-bought or too-expensive card is inert (styled via the
-    // classes above instead of a disabled-button affordance).
     if (!alreadyBought && canAfford) {
       card.addEventListener('click', () => buyBoonFromShop(def, price));
     }
@@ -2400,52 +2195,196 @@ function renderShopDialog() {
     shopChoicesEl.appendChild(card);
   });
 
-  // NEW — consumable section, same shop visit. Always exactly 3
-  // DISTINCT types (rollConsumableShopOffer() guarantees this).
+  // CHANGED — consumables render as belt-style squares (icon only,
+  // hover tooltip), price shown below in the same spot as before.
   consumableShopChoicesEl.innerHTML = '';
   consumableShopState.offer.forEach(type => {
     const info = CONSUMABLE_INFO[type];
-    const price = calculateConsumablePrice(type, shopEntryScore);
+    const rawPrice = calculateConsumablePrice(type, shopEntryScore);
+    const price = applyVipDiscount(rawPrice);
     const alreadyBought = isConsumablePurchasedThisVisit(type);
     const beltFull = !hasBeltSpace();
     const canAfford = score >= price;
 
-    const card = document.createElement('div');
-    card.className = 'shop-card consumable-shop-card';
-    if (alreadyBought) card.classList.add('shop-card--bought');
-    else if (!canAfford || beltFull) card.classList.add('shop-card--unaffordable');
+    const wrapper = document.createElement('div');
+    wrapper.className = 'consumable-shop-item';
 
-    card.innerHTML = `
-      <div class="boon-card-header">
-        <img class="boon-card-gem-icon" src="css/model/svg/consumables/${info.file}" alt="${info.name}">
-        <h3>${info.name}</h3>
-      </div>
-      <p>${info.description}</p>
-      <div class="shop-card-price">${alreadyBought ? 'Purchased' : beltFull ? 'Belt full' : `${price} pts`}</div>
-    `;
+    const square = document.createElement('div');
+    square.className = 'consumable-shop-square';
+    if (alreadyBought || !canAfford || beltFull) square.classList.add('consumable-shop-square--unaffordable');
+    square.dataset.tooltip = `${info.name} — ${info.description}`;
+
+    const icon = document.createElement('div');
+    icon.className = 'consumable-shop-icon';
+    icon.style.backgroundImage = `url('css/model/svg/consumables/${info.file}')`;
+    square.appendChild(icon);
 
     if (!alreadyBought && canAfford && !beltFull) {
-      card.addEventListener('click', () => buyConsumableFromShop(type, price));
+      square.addEventListener('click', () => buyConsumableFromShop(type, price));
     }
 
-    consumableShopChoicesEl.appendChild(card);
+    const priceEl = document.createElement('div');
+    priceEl.className = 'shop-card-price';
+    priceEl.textContent = alreadyBought ? 'Purchased' : beltFull ? 'Belt full' : `${price} pts`;
+
+    wrapper.appendChild(square);
+    wrapper.appendChild(priceEl);
+    consumableShopChoicesEl.appendChild(wrapper);
   });
+
+  renderCustomerServiceSection(); // NEW
 }
 
 /**
- * Attempts to buy one boon from the current shop offer: deducts its
- * price from score, then calls the EXACT same pickBoon()/
- * applyBoonEffect() pair the free level-up dialog uses, so a bought
- * boon counts against that boon's maxOccurrences cap exactly like a
- * free one would.
+ * NEW — rebuilds the Customer Service section: either the two
+ * service cards (Curse Removal / Limited Edition Boons Sale), or —
+ * if curseRemovalPickerOpen is true — the curse-selection list
+ * instead (see renderCurseRemovalPicker()).
  *
- * @param {object} def - the BOON_POOL entry being bought.
- * @param {number} price - its price, exactly as shown on the card
- *   (recomputed by the caller, not trusted from a stale click event).
+ * @returns {void}
+ */
+function renderCustomerServiceSection() {
+  customerServiceChoicesEl.innerHTML = '';
+
+  if (curseRemovalPickerOpen) {
+    renderCurseRemovalPicker();
+    return;
+  }
+
+  const locked = customerServiceState.usedThisVisit;
+
+  // --- Curse Removal Service ---
+  const curseCard = document.createElement('div');
+  curseCard.className = 'customer-service-card';
+  const hasCurses = curseState.activeCurses.length > 0;
+  const cursePrice = applyVipDiscount(calculateCurseRemovalPrice(shopEntryScore));
+  const curseClickable = hasCurses && !locked && score >= cursePrice;
+
+  curseCard.innerHTML = `
+    <h4>Curse Removal Service</h4>
+    <p>Select and remove one active curse.</p>
+    <div class="shop-card-price">${!hasCurses ? 'Not available' : locked ? 'Already used this visit' : `${cursePrice} pts`}</div>
+  `;
+  if (curseClickable) {
+    curseCard.addEventListener('click', () => {
+      curseRemovalPickerOpen = true;
+      renderCustomerServiceSection();
+    });
+  } else {
+    curseCard.classList.add('customer-service-card--disabled');
+  }
+
+  // --- Limited Edition Boons Sale Service ---
+  const saleCard = document.createElement('div');
+  saleCard.className = 'customer-service-card';
+  const boonDef = customerServiceState.limitedEditionBoonId
+    ? BOON_POOL.find(d => d.id === customerServiceState.limitedEditionBoonId)
+    : null;
+  const salePrice = boonDef ? applyVipDiscount(calculateBoonPrice(boonDef.rarity, currentShopTier, shopEntryScore)) : 0;
+  const saleClickable = !!boonDef && !locked && score >= salePrice;
+
+  saleCard.innerHTML = `
+    <h4>Limited Edition Boons Sale</h4>
+    <p>${boonDef ? `${boonDef.name} — ${boonDef.description}` : 'No shop-exclusive boons are currently available.'}</p>
+    <div class="shop-card-price">${!boonDef ? 'Out Of Service' : locked ? 'Already used this visit' : `${salePrice} pts`}</div>
+  `;
+  if (saleClickable) {
+    saleCard.addEventListener('click', () => buyLimitedEditionBoon(boonDef, salePrice));
+  } else {
+    saleCard.classList.add('customer-service-card--disabled');
+  }
+
+  customerServiceChoicesEl.appendChild(curseCard);
+  customerServiceChoicesEl.appendChild(saleCard);
+}
+
+/**
+ * NEW — the curse-selection list shown after clicking "Curse Removal
+ * Service": one row per currently active curse, each with its own
+ * "Remove" button, plus a "Cancel" button to back out without buying
+ * anything.
+ *
+ * @returns {void}
+ */
+function renderCurseRemovalPicker() {
+  const price = applyVipDiscount(calculateCurseRemovalPrice(shopEntryScore));
+
+  const heading = document.createElement('p');
+  heading.className = 'curse-picker-heading';
+  heading.textContent = `Select a curse to remove (${price} pts):`;
+  customerServiceChoicesEl.appendChild(heading);
+
+  curseState.activeCurses.forEach(activeCurse => {
+    const def = CURSE_POOL.find(c => c.id === activeCurse.id);
+    if (!def) return;
+
+    const row = document.createElement('div');
+    row.className = 'curse-picker-row';
+
+    const label = document.createElement('span');
+    label.textContent = `${def.name} — ${def.description}`;
+    row.appendChild(label);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.textContent = 'Remove';
+    removeBtn.disabled = score < price;
+    removeBtn.addEventListener('click', () => {
+      removeCurseViaService(activeCurse.pickId);
+      score -= price;
+      scoreEl.textContent = score;
+      renderSideStats();
+      addHistoryEntry('boon', `Removed curse via Customer Service: ${def.name} (-${price})`, 'boon');
+      renderHistoryPanel();
+      curseRemovalPickerOpen = false;
+      renderShopDialog();
+    });
+    row.appendChild(removeBtn);
+
+    customerServiceChoicesEl.appendChild(row);
+  });
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.className = 'curse-picker-cancel';
+  cancelBtn.addEventListener('click', () => {
+    curseRemovalPickerOpen = false;
+    renderCustomerServiceSection();
+  });
+  customerServiceChoicesEl.appendChild(cancelBtn);
+}
+
+/**
+ * NEW — buys the currently-offered Limited Edition boon.
+ *
+ * @param {object} def
+ * @param {number} price
+ * @returns {void}
+ */
+function buyLimitedEditionBoon(def, price) {
+  if (score < price) return;
+
+  score -= price;
+  scoreEl.textContent = score;
+
+  const activeBoon = pickBoon(def.id);
+  activeBoon.appliedEffect = applyBoonEffect(def);
+  markCustomerServiceUsed();
+
+  addHistoryEntry('boon', `Bought from Customer Service: ${def.name} (-${price}) — ${def.description}`, 'boon');
+  renderHistoryPanel();
+  renderSideStats();
+  renderShopDialog();
+}
+
+/**
+ * Attempts to buy one boon from the current shop offer.
+ *
+ * @param {object} def
+ * @param {number} price
  * @returns {void}
  */
 function buyBoonFromShop(def, price) {
-  if (score < price) return; // safety net — card shouldn't be clickable here at all
+  if (score < price) return;
 
   score -= price;
   scoreEl.textContent = score;
@@ -2454,62 +2393,64 @@ function buyBoonFromShop(def, price) {
   activeBoon.appliedEffect = applyBoonEffect(def);
   markBoonPurchased(def.id);
 
-  // Reuses the same 'boon' tone the free pick uses, so the log reads
-  // as one consistent timeline regardless of free-vs-bought.
   addHistoryEntry('boon', `Bought from shop: ${def.name} (-${price}) — ${def.description}`, 'boon');
   renderHistoryPanel();
 
   renderSideStats();
-  renderShopDialog(); // reflect the new score + this card's bought state
+  renderShopDialog();
 }
 
 /**
- * Called once a swap's cascade sequence has fully settled AND (if
- * this run leveled up) the level-up dialog/boon pick has finished.
- * Reshuffles the board if no legal move remains, otherwise shows the
- * normal prompt.
+ * The Resurrection Cross's actual reshuffle-and-consume step.
  *
- * NOTE: every call to this function is itself only ever reached as a
- * consequence of a real match/cascade having just resolved (see the
- * call sites in resolveMatches() and advanceTilePlacement()) — that's
- * what makes it safe for this to be the ONLY place that reschedules
- * the hint timer (scheduleHintTimer()) and still satisfy "the hint
- * countdown only resets on a real match."
+ * @param {object} entry
+ * @param {string} messageHtml
+ * @returns {void}
+ */
+function triggerResurrectionCross(entry, messageHtml) {
+  removeConsumableFromInventory(entry.pickId);
+  renderConsumableBelt();
+  messageEl.innerHTML = messageHtml;
+  setTimeout(() => {
+    rebuildGridRespectingBlocked(grid);
+    resetSpecialGems();
+    renderBoardWithInteractions();
+    busy = false;
+    scheduleHintTimer();
+    // NEW — re-check afterward. Per design ("if after using it, they
+    // are still deadlocked, repeat the process"), a fresh reshuffle
+    // should essentially never still be stuck, but this makes the
+    // whole flow self-correcting for free if it somehow ever is —
+    // checkEndState() will just fall through to the "no Resurrection
+    // Cross left" branch, since this one was already consumed above.
+    checkEndState();
+  }, 400);
+}
+
+/**
+ * Shown when the board is stuck AND the player holds BOTH a
+ * Resurrection Cross AND at least one other board-changing consumable.
  *
  * @returns {void}
  */
-function checkEndState() {
-  if (ENABLE_MOVES_LIMIT && moves <= 0) {
-    if (score >= progressionState.scoreTarget) {
-      messageEl.textContent = `target reached — final score ${score}`;
-    } else {
-      showLoseDialog();
-    }
-    return;
-  }
+function showDeadlockChoiceDialog() {
+  busy = true;
+  deadlockMessageEl.innerHTML =
+    `There are no more valid moves. Would you like to use one of your consumable items first, before your ` +
+    `${formatConsumableNameSpan(CONSUMABLE_TYPE.RESURRECTION_CROSS)} activates?`;
+  deadlockDialogEl.classList.remove('hidden');
+}
 
-  if (!hasPossibleMove(grid, isHyperstarCell, isSpecialSwapPair)) {
-    // NEW — Resurrection Cross: if the player holds one, it
-    // auto-consumes itself right here instead of letting the no-moves
-    // game-over fire, and reshuffles the board exactly like the
-    // existing PREVENT_DEADLOCK path already does below. Checked
-    // BEFORE that flag on purpose — per design, it's meant to save a
-    // run that would otherwise be stuck even with PREVENT_DEADLOCK off.
-    const resurrectionCross = findFirstConsumableOfType(CONSUMABLE_TYPE.RESURRECTION_CROSS);
-    if (resurrectionCross) {
-      removeConsumableFromInventory(resurrectionCross.pickId);
-      renderConsumableBelt();
-      messageEl.textContent = 'Your Resurrection Cross saves the run — reshuffling...';
-      setTimeout(() => {
-        rebuildGridRespectingBlocked(grid);
-        resetSpecialGems();
-        renderBoardWithInteractions();
-        busy = false;
-        scheduleHintTimer();
-      }, 400);
-      return;
-    }
+/**
+ * The single place that decides what happens when the board is stuck.
+ *
+ * @returns {void}
+ */
+function handleDeadlock() {
+  const resurrectionCross = findFirstConsumableOfType(CONSUMABLE_TYPE.RESURRECTION_CROSS);
 
+  if (!resurrectionCross) {
+    // No safety net at all — same behavior the game always had.
     if (PREVENT_DEADLOCK) {
       messageEl.textContent = MESSAGES.RESHUFFLING;
       setTimeout(() => {
@@ -2525,12 +2466,59 @@ function checkEndState() {
     return;
   }
 
-  messageEl.textContent = MESSAGES.SELECT_PROMPT;
-  scheduleHintTimer(); // NEW — the board just went idle after a real match; start the countdown
+  // The player holds a Resurrection Cross — they get a second chance.
+  const hasBoardChangingConsumable = consumableState.inventory.some(
+    e => BOARD_CHANGING_CONSUMABLE_TYPES.includes(e.type)
+  );
+
+  if (!hasBoardChangingConsumable) {
+    // Nothing else they could try first — just inform them and
+    // trigger the Cross directly.
+    triggerResurrectionCross(
+      resurrectionCross,
+      `There are no more valid moves, but you are given a second chance by your ` +
+      `${formatConsumableNameSpan(CONSUMABLE_TYPE.RESURRECTION_CROSS)}! Reshuffling...`
+    );
+    return;
+  }
+
+  // They hold at least one board-changing consumable too — offer the choice.
+  showDeadlockChoiceDialog();
 }
 
 /**
- * Shows the lose dialog with the final score/target (ENABLE_MOVES_LIMIT case).
+ * Called once a swap's cascade sequence has fully settled AND (if
+ * this run leveled up) the level-up dialog/boon pick has finished.
+ * Reshuffles the board if no legal move remains, otherwise shows the
+ * normal prompt.
+ *
+ * CHANGED THIS ROUND — the stuck-board branch now delegates entirely
+ * to handleDeadlock() instead of inlining the Resurrection Cross
+ * check here.
+ *
+ * @returns {void}
+ */
+function checkEndState() {
+  if (ENABLE_MOVES_LIMIT && moves <= 0) {
+    if (score >= progressionState.scoreTarget) {
+      messageEl.textContent = `target reached — final score ${score}`;
+    } else {
+      showLoseDialog();
+    }
+    return;
+  }
+
+  if (!hasPossibleMove(grid, isHyperstarCell, isSpecialSwapPair)) {
+    handleDeadlock();
+    return;
+  }
+
+  messageEl.textContent = MESSAGES.SELECT_PROMPT;
+  scheduleHintTimer();
+}
+
+/**
+ * Shows the lose dialog with the final score/target.
  *
  * @returns {void}
  */
@@ -2543,7 +2531,6 @@ function showLoseDialog() {
 
 /**
  * Shows the "no legal moves left on the board" game-over dialog.
- * Reuses the same dialog element as showLoseDialog().
  *
  * @returns {void}
  */
@@ -2570,6 +2557,32 @@ shopLeaveBtn.addEventListener('click', () => {
   if (finish) finish();
 });
 
+// NEW — the deadlock-choice dialog's Yes/No buttons.
+deadlockYesBtn.addEventListener('click', () => {
+  deadlockDialogEl.classList.add('hidden');
+  // The player wants to try a board-changing consumable first. Leave
+  // `busy` false so they can actually click a belt slot / target a
+  // cell — the normal consumable-use flow already ends by calling
+  // checkEndState() again on its own (either directly, when nothing
+  // was cleared, or via continueCascadeAfterMatch()'s eventual
+  // settle), which is exactly what re-runs this whole deadlock check
+  // afterward — "if after using it, they are still deadlocked,
+  // repeat the process" falls out of that for free, with no extra
+  // bookkeeping needed here.
+  busy = false;
+  messageEl.textContent = 'Select a consumable item to use.';
+});
+
+deadlockNoBtn.addEventListener('click', () => {
+  deadlockDialogEl.classList.add('hidden');
+  const resurrectionCross = findFirstConsumableOfType(CONSUMABLE_TYPE.RESURRECTION_CROSS);
+  if (!resurrectionCross) { busy = false; checkEndState(); return; }
+  triggerResurrectionCross(
+    resurrectionCross,
+    `Your ${formatConsumableNameSpan(CONSUMABLE_TYPE.RESURRECTION_CROSS)} saves the run — reshuffling...`
+  );
+});
+
 applyStaticText();
-applyMovesLimitVisibility(); 
+applyMovesLimitVisibility();
 showStartScreen();
