@@ -181,10 +181,24 @@ export const NO_MOVES_GAME_OVER_DELAY_MS = 2000;
 export const HINT_DELAY_MS = 10000;
 
 // --- boon rarity gating ---
-// Legendary-rarity boons never appear in any offer — free level-up
-// dialog OR the shop — until the player has reached this level.
-// Checked in gameplay/boon.js's isBoonAvailable(), which both offer
-// generators (generateBoonOffer() and generateEqualWeightBoonOffer())
-// already filter through, so gating it there covers both places at
-// once.
-export const LEGENDARY_UNLOCK_LEVEL = 6;
+// The FIRST cleared level whose reward is allowed to contain each
+// rarity, per source. "Cleared level" = the level the player just
+// finished (the level a reward is FOR), NOT the level they're about
+// to play. Example: epic: 5 means epic can first appear in the reward
+// for clearing level 5 (so levels 1-4 never offer it).
+//
+// Three separate rows so each source can be tuned independently:
+//   levelUp - the free pick after every cleared level
+//   event   - random boon rewards from Elite/Challenge/Encounter events
+//   shop    - shop offers + the Limited Edition Boons Sale slot
+//
+// Keys are plain rarity strings (not BOON_RARITY) on purpose:
+// resources/boon/boon.js already imports this file, so importing
+// BOON_RARITY back here would create a circular import.
+export const BOON_RARITY_MIN_CLEARED_LEVEL = {
+  levelUp: { common: 1, uncommon: 1, rare: 1, epic: 5, legendary: 6 },
+  event:   { common: 1, uncommon: 1, rare: 1, epic: 5, legendary: 6 },
+  // Shop preserves the previous behavior (legendary from the first
+  // shop visit, which happens after clearing level 5). Change freely.
+  shop:    { common: 1, uncommon: 1, rare: 1, epic: 1, legendary: 5 },
+};

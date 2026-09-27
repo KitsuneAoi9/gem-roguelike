@@ -13,17 +13,15 @@ export const CONSUMABLE_TYPE = {
 };
 
 // `pricePercent` is a PERCENT of the score the player had when they
-// ENTERED the shop (the same shopEntryScore snapshot the boon shop
-// already takes — see main.js's openShopDialog()) — not a flat
-// price, and not tied to the live/current score.
+// ENTERED the shop (the shopEntryScore snapshot) — not a flat price.
 //
 // `requiresTarget: true` means clicking the belt slot arms
 // "targeting mode" and the NEXT board click applies the effect there
-// (Pickaxe/Dynamite). `requiresTarget: false` + no `passive` flag
-// means it activates immediately on click (Dice/Golden Ticket).
-// `passive: true` means it can't be clicked at all — it auto-triggers
-// on its own at a specific game event (Resurrection Cross, on a
-// would-be deadlock game-over — see main.js's checkEndState()).
+// (Pickaxe/Dynamite/Dice — CHANGED this round, Dice now requires a
+// target too, see below). `requiresTarget: false` + no `passive` flag
+// means it activates immediately on click (Golden Ticket).
+// `passive: true` means it can't be clicked at all (Resurrection
+// Cross, auto-triggers on its own).
 export const CONSUMABLE_INFO = {
   [CONSUMABLE_TYPE.PICKAXE]: {
     name: 'Pickaxe',
@@ -42,9 +40,13 @@ export const CONSUMABLE_INFO = {
   [CONSUMABLE_TYPE.DICE]: {
     name: 'Dice',
     file: 'dice.svg',
-    description: "Shuffle every gem color on the board. Special gems stay on the same cells, but a Laser/Discharger's own underlying color can change.",
+    // CHANGED — used to shuffle the WHOLE board with no target at
+    // all. Now shuffles only a 3x3 area the player picks, same
+    // targeting flow as Pickaxe/Dynamite (requiresTarget flipped to
+    // true below).
+    description: 'Shuffle every gem color within a 3\u00d73 area on the board. Special gems stay on the same cells, but a Laser/Discharger\'s own underlying color can change. Obsidian gems are unaffected.',
     pricePercent: 0.20,
-    requiresTarget: false,
+    requiresTarget: true, // CHANGED — was false
   },
   [CONSUMABLE_TYPE.GOLDEN_TICKET]: {
     name: 'Golden Ticket',

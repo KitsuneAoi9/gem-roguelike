@@ -1,21 +1,28 @@
 // ============================================================
-// BOON_EFFECTS.JS — applies (and, new this round, REVERSES) a picked
-// boon's effect on game state.
+// BOON_EFFECTS.JS — applies (and reverses) a picked boon's effect on
+// game state.
 //
-// applyBoonEffect(def) now RETURNS a normalized "appliedEffect"
-// record describing exactly what it just did (which gem(s), which
-// bucket, how much). The caller attaches that return value onto the
+// applyBoonEffect(def) RETURNS a normalized "appliedEffect" record
+// describing exactly what it just did (which gem(s), which bucket,
+// how much). The caller attaches that return value onto the
 // activeBoon entry pickBoon()/grantBoonBypassingCap() just created
 // (`activeBoon.appliedEffect = applyBoonEffect(def)`), so a LATER
 // call to reverseBoonEffect(activeBoon) can undo EXACTLY what was
 // applied — including the specific random gems a Frenzy/Brilliance/
-// Addict pick happened to penalize, which can't be re-derived from
-// `def` alone since that randomness is resolved fresh every pick.
+// Addict/Forbidden pick happened to penalize, which can't be
+// re-derived from `def` alone since that randomness is resolved fresh
+// every pick.
 //
-// This is the foundation for the event system's "trade away a boon"
-// (Encounter) and "lose a random boon" (Elite loss) — and, per
-// design, a future level-up/level-down boon mechanic is expected to
-// reuse this exact reversal path too.
+// NEW THIS ROUND — three new effect.kind cases:
+//   - 'match3_shard_chance'         (Entropy/Luminous/Explosive Shard)
+//   - 'match_size_multiplier_bonus' (Threesome/Foursome/Fivesome Matchmaker)
+//   - 'gem_forbidden_swap'          (the 11-entry "Forbidden <Gem>" set)
+// Frantic Star / Warmonger / Adventure Junkie / Perpetual Boon do NOT
+// need new cases here — see resources/boon/boon.js's file header for
+// why each of those is either a presence-only marker (checked via
+// isBoonActive(), nothing to apply/reverse) or a recurring/triggered
+// effect handled entirely in main.js's applyScoreGain(), same pattern
+// Crystallized Parasite already established.
 // ============================================================
 
 import { gemBaseState } from '../resources/base%20value/gem_base_state.js';
@@ -26,11 +33,11 @@ import { progressionState } from '../resources/progression/progression.js';
 import { resetGemBaseState } from './gem_base.js';
 import { calculateScoreTarget } from './progression.js';
 
-// NEW — module-level counter so every frenzyPicks entry carries a
-// unique id, letting reverseBoonEffect() find and splice out EXACTLY
-// the entry a specific Frenzy pick pushed, even if the player has
-// picked several different Frenzy boons this run. Reset alongside
-// everything else in resetBoonEffects().
+// Module-level counter so every frenzyPicks entry carries a unique
+// id, letting reverseBoonEffect() find and splice out EXACTLY the
+// entry a specific Frenzy pick pushed, even if the player has picked
+// several different Frenzy boons this run. Reset alongside everything
+// else in resetBoonEffects().
 let nextFrenzyPickId = 1;
 
 /**
@@ -45,22 +52,18 @@ export function resetBoonEffects() {
   boonEffectState.globalScoreMultiplier = 1.0;
   boonEffectState.globalScoreBonus = 0;
   boonEffectState.targetScoreMultiplier = 1.0;
-  nextFrenzyPickId = 1; // NEW
+  // NEW — reset the two brand-new state buckets alongside everything else.
+  boonEffectState.shardPicks = { entropy: 0, luminous: 0, explosive: 0 };
+  boonEffectState.matchSizeBonus = { 3: 0, 4: 0, 5: 0 };
+  nextFrenzyPickId = 1;
 }
 
 /**
  * Picks `count` DISTINCT random gem ids to penalize, excluding
- * `excludeId` (the boon's own target gem).
- *
- * CHANGED THIS ROUND — only draws from UNLOCKED gems now. Frenzy/
- * Brilliance/Addict's random penalty target was landing on locked
- * gems (Onyx etc.) — a penalty the player can't even see reflected
- * anywhere (the side panel only shows the 7 active gems), and one
- * that gives that gem's eventual unlock a nasty invisible head-start
- * debuff. This does NOT change Opulence's or Jeweler/Gemologist's "every
- * gem in the catalog" sweep elsewhere in this file — those are
- * untouched, per existing precedent — only the RANDOM-pick
- * archetypes are affected, since only they route through this helper.
+ * `excludeId` (the boon's own target gem). Only draws from UNLOCKED
+ * gems — see prior handoff for the reasoning (a penalty on a locked
+ * gem would be invisible to the player and unfairly debuff it before
+ * it's even unlocked).
  *
  * @param {string} excludeId
  * @param {number} count
@@ -166,9 +169,9 @@ export function applyBoonEffect(def) {
 
     case 'frenzy': {
       const penalizedGems = pickRandomOtherGems(effect.gem, effect.penalizedCount);
-      // NEW — frenzyPickId ties this exact frenzyPicks[] entry back
-      // to the appliedEffect record below, so reverseBoonEffect() can
-      // splice out precisely THIS pick's entry later.
+      // frenzyPickId ties this exact frenzyPicks[] entry back to the
+      // appliedEffect record below, so reverseBoonEffect() can splice
+      // out precisely THIS pick's entry later.
       const frenzyPickId = nextFrenzyPickId++;
       boonEffectState.frenzyPicks.push({
         frenzyPickId,
@@ -213,6 +216,51 @@ export function applyBoonEffect(def) {
       return { kind: effect.kind, multiplierDelta, bonusDelta, targetFactor };
     }
 
+    // ============================================================
+    // NEW — Entropy/Luminous/Explosive Shard. Purely a counter bump;
+    // the actual "roll the chance, maybe spawn something" logic lives
+    // in gameplay/special_gem.js, reading boonEffectState.shardPicks
+    // directly at match-3 resolution time. Nothing here needs to know
+    // which specific shard type does what.
+    // ============================================================
+    case 'match3_shard_chance':
+      boonEffectState.shardPicks[effect.shardType] += 1;
+      return { kind: effect.kind, shardType: effect.shardType };
+
+    // ============================================================
+    // NEW — Threesome/Foursome/Fivesome Matchmaker. Additive bonus on
+    // top of base_score.js's fixed per-size multiplier table.
+    // ============================================================
+    case 'match_size_multiplier_bonus':
+      boonEffectState.matchSizeBonus[effect.size] += effect.amount;
+      return { kind: effect.kind, size: effect.size, amount: effect.amount };
+
+    // ============================================================
+    // NEW — the "Forbidden <Gem>" set. Same overall shape as Polish
+    // (both score AND multiplier bumped on one gem) combined with
+    // Brilliance's "penalize exactly N random other gems" pattern,
+    // just hitting BOTH buckets on the penalized gem(s) too instead of
+    // just one.
+    // ============================================================
+    case 'gem_forbidden_swap': {
+      gemBaseState.perGem[effect.gem].scoreBonus += effect.scoreAmount;
+      gemBaseState.perGem[effect.gem].multiplierBonus += effect.multiplierAmount;
+      const penalizedGems = pickRandomOtherGems(effect.gem, effect.penalizedCount);
+      penalizedGems.forEach(id => {
+        gemBaseState.perGem[id].scoreBonus += effect.otherScorePenalty;
+        gemBaseState.perGem[id].multiplierBonus += effect.otherMultiplierPenalty;
+      });
+      return {
+        kind: effect.kind,
+        gem: effect.gem,
+        scoreAmount: effect.scoreAmount,
+        multiplierAmount: effect.multiplierAmount,
+        penalizedGems,
+        otherScorePenalty: effect.otherScorePenalty,
+        otherMultiplierPenalty: effect.otherMultiplierPenalty,
+      };
+    }
+
     case 'board_expand':
     case 'board_shrink':
     case 'board_expand_and_shrink':
@@ -221,13 +269,30 @@ export function applyBoonEffect(def) {
       // explicitly refuses rather than silently doing nothing.
       return { kind: effect.kind, reversible: false };
 
+    // NEW — every kind that falls through to here on purpose:
+    //   - 'flag_no_op'              (Frantic Star — presence-only marker,
+    //                                checked directly via isBoonActive())
+    //   - 'perpetual_score_percent' (Perpetual Boon — recurring/triggered,
+    //                                handled entirely in main.js's
+    //                                applyScoreGain(), same non-static-
+    //                                delta pattern Crystallized Parasite uses)
+    //   - 'lethal_gem_clear'        (Decaying Birthstone curse — its real
+    //                                per-pick data lives directly on the
+    //                                activeCurse entry via grantCurse()'s
+    //                                `data` param, not in gemBaseState/
+    //                                boonEffectState at all)
+    //   - 'gem_multiplier_lock'     (Petrified curse — same reasoning;
+    //                                the lock is read directly off the
+    //                                activeCurse entry by gem_base.js)
+    // None of these have anything for THIS dispatcher to apply or
+    // later reverse, so `reversible: false` is exactly correct.
     default:
       return { kind: effect.kind, reversible: false };
   }
 }
 
 /**
- * NEW — undoes exactly what applyBoonEffect() did for one specific
+ * Undoes exactly what applyBoonEffect() did for one specific
  * activeBoon entry, using that entry's stored `appliedEffect` (NOT
  * re-reading `def` — a random effect's exact targets are only known
  * from what was actually applied). Call BEFORE removing the entry
@@ -235,15 +300,10 @@ export function applyBoonEffect(def) {
  * — this function only touches gemBaseState/boonEffectState/
  * progressionState, never the boon list itself.
  *
- * Foundation for the event system's "trade away a boon" (Encounter)
- * and "lose a random boon" (Elite loss). Per design, a future
- * level-DOWN boon mechanic is expected to reuse this exact function.
- *
  * @param {object} activeBoon - an entry from boonState.activeBoons,
  *   with a non-null `appliedEffect`.
  * @returns {boolean} true if the reversal actually undid something;
- *   false if this pick's effect was flagged non-reversible (currently
- *   only the board-shape kinds).
+ *   false if this pick's effect was flagged non-reversible.
  */
 export function reverseBoonEffect(activeBoon) {
   const applied = activeBoon?.appliedEffect;
@@ -287,9 +347,7 @@ export function reverseBoonEffect(activeBoon) {
 
     case 'frenzy': {
       // Splice out ONLY the exact frenzyPicks entry this pick pushed
-      // — matched by frenzyPickId, never by array position (position
-      // could have shifted if an earlier Frenzy pick was already
-      // removed this run).
+      // — matched by frenzyPickId, never by array position.
       const idx = boonEffectState.frenzyPicks.findIndex(p => p.frenzyPickId === applied.frenzyPickId);
       if (idx !== -1) boonEffectState.frenzyPicks.splice(idx, 1);
       return true;
@@ -310,6 +368,24 @@ export function reverseBoonEffect(activeBoon) {
         boonEffectState.targetScoreMultiplier /= applied.targetFactor;
       }
       progressionState.scoreTarget = calculateScoreTarget(progressionState.level);
+      return true;
+
+    // NEW — reverse the two brand-new stat-bucket kinds.
+    case 'match3_shard_chance':
+      boonEffectState.shardPicks[applied.shardType] -= 1;
+      return true;
+
+    case 'match_size_multiplier_bonus':
+      boonEffectState.matchSizeBonus[applied.size] -= applied.amount;
+      return true;
+
+    case 'gem_forbidden_swap':
+      gemBaseState.perGem[applied.gem].scoreBonus -= applied.scoreAmount;
+      gemBaseState.perGem[applied.gem].multiplierBonus -= applied.multiplierAmount;
+      applied.penalizedGems.forEach(id => {
+        gemBaseState.perGem[id].scoreBonus -= applied.otherScorePenalty;
+        gemBaseState.perGem[id].multiplierBonus -= applied.otherMultiplierPenalty;
+      });
       return true;
 
     default:

@@ -1,58 +1,81 @@
 // ============================================================
 // BOON.JS — offer generation + pick tracking.
 //
-// Reads/writes boonState (resources/boon/) but owns none of the
-// state itself. Offer generation is rarity-weighted (BOON_RARITY_WEIGHTS)
-// and filters out gem-scoped boons for locked gems (gemUnlockState).
-//
-// NEW THIS ROUND — every activeBoons entry now carries a unique
-// `pickId` (so ONE specific pick, out of possibly several copies of
-// the same boon, can be targeted for removal later) and an
-// `appliedEffect` slot (filled in by the caller right after
-// applyBoonEffect() runs — see boon_effects.js). This is what makes
-// the event system's "trade away a boon" / "lose a random boon"
-// possible: reverseBoonEffect() + removeActiveBoon() together can
-// undo ONE exact pick without touching anything else the player is
-// holding.
+// CHANGED THIS ROUND — rarity level-gating moved OUT of
+// isBoonAvailable() into its own isRarityAllowed(). Reason: the old
+// gate read progressionState.level, which is WRONG once several
+// queued level-up rewards are processed one after another (the
+// current level is already e.g. 11 while we're still handing out
+// level 6's reward). Every offer generator now takes an explicit
+// `clearedLevel` — the level that reward is FOR.
 // ============================================================
 
-import { BOON_POOL, BOON_RARITY_WEIGHTS, BOON_RARITY } from '../resources/boon/boon.js';
+import { BOON_POOL, BOON_RARITY_WEIGHTS, EVENT_ONLY_BOON_IDS, SHOP_ONLY_BOON_IDS } from '../resources/boon/boon.js';
 import { boonState } from '../resources/boon/boon_state.js';
-import { LEGENDARY_UNLOCK_LEVEL } from '../resources/constant/constants.js';
+import { BOON_RARITY_MIN_CLEARED_LEVEL } from '../resources/constant/constants.js';
 import { gemUnlockState } from '../resources/gem/gem_unlock_state.js';
 import { progressionState } from '../resources/progression/progression.js';
 
-// NEW — module-level counter for `pickId`. Reset alongside
+// Module-level counter for `pickId`. Reset alongside
 // boonState.activeBoons in resetBoons().
 let nextPickId = 1;
 
 function timesPicked(boonId) {
-  // NEW — an event-granted boon that bypasses maxOccurrences
-  // (exemptFromOccurrenceCap: true — currently only Elite's win
-  // reward) must NOT count against this boon's own cap for any
-  // FUTURE normal pick — "doesn't count towards occurrences" per
-  // design. Filtered out here so every caller of timesPicked() gets
-  // this for free.
+  // Event-granted boons flagged exemptFromOccurrenceCap never count
+  // against a boon's own cap for any future normal pick.
   return boonState.activeBoons.filter(b => b.id === boonId && !b.exemptFromOccurrenceCap).length;
 }
 
 /**
- * Respects the pick cap, gem-unlock status, AND the Legendary level
- * gate.
+ * Respects the pick cap and gem-unlock status.
  *
- * EXPORTED THIS ROUND — the event system (gameplay/event.js) reuses
- * this exact gate for two things: finding a same-rarity replacement
- * for an Encounter trade, and checking whether ANY Legendary boon is
- * currently offerable before letting a Challenge event trigger at
- * all. Keeping this the single source of truth for "can this boon be
- * offered right now" avoids a second, parallel gate drifting out of
- * sync with this one somewhere in event.js.
+ * NOTE — the Legendary level gate that used to live here is GONE on
+ * purpose. Rarity gating now lives in isRarityAllowed() below, since
+ * it needs to know WHICH level a reward is for (this function is also
+ * called by pickBoon(), which must never re-reject a boon the offer
+ * generator already allowed).
  */
 export function isBoonAvailable(def) {
   if (def.effect?.gem && !gemUnlockState.unlocked[def.effect.gem]) return false;
-  if (def.rarity === BOON_RARITY.LEGENDARY && progressionState.level < LEGENDARY_UNLOCK_LEVEL) return false;
   if (def.maxOccurrences == null) return true;
   return timesPicked(def.id) < def.maxOccurrences;
+}
+
+/**
+ * NEW — whether a boon's rarity is unlocked yet for a given reward
+ * source and cleared level.
+ *
+ * @param {object} def - a BOON_POOL entry.
+ * @param {'levelUp'|'event'|'shop'} source - which settings row to read.
+ * @param {number} clearedLevel - the level this reward is FOR.
+ * @returns {boolean}
+ */
+export function isRarityAllowed(def, source, clearedLevel) {
+  // Unknown source/rarity falls back to "no restriction" (level 1)
+  // rather than silently hiding the boon forever.
+  const minLevel = BOON_RARITY_MIN_CLEARED_LEVEL[source]?.[def.rarity] ?? 1;
+  return clearedLevel >= minLevel;
+}
+
+/**
+ * True if the player currently holds AT LEAST ONE pick of the given
+ * boon id, regardless of how many copies or which pickId.
+ *
+ * @param {string} boonId
+ * @returns {boolean}
+ */
+export function isBoonActive(boonId) {
+  return boonState.activeBoons.some(b => b.id === boonId);
+}
+
+/**
+ * How many copies of a given boon id the player currently holds.
+ *
+ * @param {string} boonId
+ * @returns {number}
+ */
+export function countActiveBoon(boonId) {
+  return boonState.activeBoons.filter(b => b.id === boonId).length;
 }
 
 function shuffle(array) {
@@ -72,18 +95,38 @@ function rollRarity() {
     cumulative += weight;
     if (roll < cumulative) return rarity;
   }
-  return 'common'; // fallback if weights don't sum to exactly 1
+  return 'common';
+}
+
+/** Every id that must never appear through the normal offer pools — shared by both generators below. */
+function isExcludedFromNormalOffers(def) {
+  return def.id === 'perpetual_boon' || EVENT_ONLY_BOON_IDS.has(def.id) || SHOP_ONLY_BOON_IDS.has(def.id);
 }
 
 /**
  * Generates a fresh set of boon choices, rarity-weighted per
- * BOON_RARITY_WEIGHTS rather than a flat uniform draw.
+ * BOON_RARITY_WEIGHTS.
+ *
+ * CHANGED THIS ROUND — takes `clearedLevel` (the level this reward is
+ * for) and drops any boon whose rarity isn't unlocked yet for
+ * 'levelUp' offers. A locked rarity that gets rolled just finds no
+ * candidates and rerolls (the existing `continue` below), so the
+ * player never sees a short offer.
  *
  * @param {number} [count=3]
+ * @param {number} [clearedLevel] - defaults to the last level cleared
+ *   (progressionState.level - 1), which is correct for callers that
+ *   run right after a clear (e.g. Lost Miner's absorb).
  * @returns {object[]}
  */
-export function generateBoonOffer(count = 3) {
-  const available = BOON_POOL.filter(isBoonAvailable);
+export function generateBoonOffer(count = 3, clearedLevel = progressionState.level - 1) {
+  // Three filters stacked: not excluded-by-design, still under its
+  // pick cap/unlocked gem, and its rarity is unlocked for this level.
+  const available = BOON_POOL
+    .filter(def => !isExcludedFromNormalOffers(def))
+    .filter(isBoonAvailable)
+    .filter(def => isRarityAllowed(def, 'levelUp', clearedLevel));
+
   const offer = [];
   const usedIds = new Set();
 
@@ -92,12 +135,13 @@ export function generateBoonOffer(count = 3) {
     attempts++;
     const rarity = rollRarity();
     const candidates = available.filter(def => def.rarity === rarity && !usedIds.has(def.id));
-    if (candidates.length === 0) continue; // unlucky/empty tier — reroll
+    if (candidates.length === 0) continue; // locked/empty rarity — just reroll
     const pick = candidates[Math.floor(Math.random() * candidates.length)];
     offer.push(pick);
     usedIds.add(pick.id);
   }
 
+  // Top-up pass: uniform fill from whatever is still allowed.
   if (offer.length < count) {
     const remaining = shuffle(available.filter(def => !usedIds.has(def.id)));
     for (const def of remaining) {
@@ -106,61 +150,67 @@ export function generateBoonOffer(count = 3) {
     }
   }
 
+  // Last-resort filler: Perpetual Boon (unlimited, never runs dry).
+  if (offer.length < count) {
+    const perpetualDef = BOON_POOL.find(def => def.id === 'perpetual_boon');
+    while (offer.length < count && perpetualDef) {
+      offer.push(perpetualDef);
+    }
+  }
+
   return offer;
 }
 
 /**
- * Equal-weight offer generation — see prior handoffs for the full
- * doc comment. Unchanged this round.
+ * Equal-weight offer generation for the shop.
+ *
+ * CHANGED THIS ROUND — takes `clearedLevel` and applies the 'shop'
+ * settings row of BOON_RARITY_MIN_CLEARED_LEVEL.
+ *
+ * @param {number} [count=5]
+ * @param {(def: object) => boolean} [extraFilter]
+ * @param {number} [clearedLevel] - level whose shop this is.
+ * @returns {object[]}
  */
-export function generateEqualWeightBoonOffer(count = 5, extraFilter = () => true) {
-  const available = BOON_POOL.filter(isBoonAvailable).filter(extraFilter);
+export function generateEqualWeightBoonOffer(
+  count = 5,
+  extraFilter = () => true,
+  clearedLevel = progressionState.level - 1
+) {
+  const available = BOON_POOL
+    .filter(def => !isExcludedFromNormalOffers(def))
+    .filter(isBoonAvailable)
+    .filter(def => isRarityAllowed(def, 'shop', clearedLevel))
+    .filter(extraFilter);
   return shuffle(available).slice(0, count);
 }
 
 /**
- * Shared constructor for an activeBoons entry — used by BOTH
- * pickBoon() (normal, cap-respecting pick) and
- * grantBoonBypassingCap() (event rewards that ignore maxOccurrences
- * entirely). Pulled into one place so the SHAPE of an activeBoon
- * entry can never drift between the two call paths.
+ * Shared constructor for an activeBoons entry.
  *
- * `appliedEffect` starts null — the caller (main.js, or
- * gameplay/event.js) is responsible for setting
- * `activeBoon.appliedEffect = applyBoonEffect(def)` immediately after
- * calling pickBoon()/grantBoonBypassingCap(). It can't be filled in
- * HERE because applyBoonEffect() needs the activeBoon to already
- * exist first (frenzy's random-target selection, for instance, has
- * no dependency on the activeBoon record, but keeping the two calls
- * as a fixed two-step pattern everywhere is what makes the whole
- * reversal system reliable — see boon_effects.js's doc comment).
- *
- * @param {object} def - a BOON_POOL entry.
- * @param {object} data - free-form extra data for this pick (unused
- *   by anything currently, kept for forward compatibility).
- * @param {boolean} exempt - true for an event-granted boon that
- *   should never count toward (or be blocked by) `def.maxOccurrences`.
- * @returns {object} the newly-created activeBoon entry (already
- *   pushed onto boonState.activeBoons).
+ * @param {object} def
+ * @param {object} data
+ * @param {boolean} exempt
+ * @returns {object}
  */
 function createActiveBoonEntry(def, data, exempt) {
   const activeBoon = {
-    pickId: nextPickId++,            // NEW — unique per-pick instance id
+    pickId: nextPickId++,
     id: def.id,
     pickedAtLevel: progressionState.level,
     data,
-    exemptFromOccurrenceCap: exempt, // NEW
-    appliedEffect: null,             // NEW — the caller fills this in right after applyBoonEffect()
+    exemptFromOccurrenceCap: exempt,
+    appliedEffect: null,
   };
   boonState.activeBoons.push(activeBoon);
   return activeBoon;
 }
 
 /**
- * Records the player's pick in boonState. Does NOT apply the boon's
- * effect — see js/gameplay/boon_effects.js's applyBoonEffect(), called
- * separately by main.js right after this (and now expected to have
- * its return value attached: `activeBoon.appliedEffect = applyBoonEffect(def)`).
+ * Records the player's pick in boonState. Does NOT apply the effect.
+ * Deliberately does NOT check rarity gates — the offer generator
+ * already did, and re-checking here against the wrong "current level"
+ * would wrongly reject queued rewards.
  *
  * @param {string} boonId
  * @param {object} [data={}]
@@ -173,25 +223,12 @@ export function pickBoon(boonId, data = {}) {
 }
 
 /**
- * NEW — grants a boon exactly like pickBoon(), but skips
- * isBoonAvailable() ENTIRELY (no maxOccurrences check, no gem-unlock
- * check, no Legendary level gate), and the resulting entry is flagged
- * `exemptFromOccurrenceCap: true`, so it also never counts against
- * that SAME boon's cap for any future normal pick.
- *
- * Currently used for exactly one thing: Gem Elitist's win reward (2
- * random Epic boons, "not affected by boon occurrences nor does it
- * count towards occurrences" per design) — see
- * gameplay/event.js's resolveEliteOutcome(). Gem-unlock filtering is
- * still done by the CALLER (event.js only ever passes in ids from a
- * pool already filtered to unlocked gems) — this function trusts the
- * id it's given completely, on purpose, since "bypass everything" is
- * exactly what it's for.
+ * Grants a boon like pickBoon(), skipping isBoonAvailable() entirely,
+ * flagged exemptFromOccurrenceCap.
  *
  * @param {string} boonId
  * @param {object} [data={}]
- * @returns {object|null} the new activeBoon entry, or null if boonId
- *   doesn't match any BOON_POOL entry at all.
+ * @returns {object|null}
  */
 export function grantBoonBypassingCap(boonId, data = {}) {
   const def = BOON_POOL.find(b => b.id === boonId);
@@ -200,16 +237,11 @@ export function grantBoonBypassingCap(boonId, data = {}) {
 }
 
 /**
- * NEW — removes one SPECIFIC pick from boonState.activeBoons by its
- * unique pickId (NOT by boon id — the player could hold several
- * copies of the same boon). Does NOT undo the pick's stat effects;
- * the caller must call boon_effects.js's reverseBoonEffect() on the
- * SAME entry FIRST (before removal — reversal reads the entry's
- * stored appliedEffect, which this function throws away).
+ * Removes one SPECIFIC pick by pickId. Caller must call
+ * reverseBoonEffect() on the same entry FIRST.
  *
  * @param {number} pickId
- * @returns {object|null} the removed entry, or null if no entry with
- *   that pickId was found.
+ * @returns {object|null}
  */
 export function removeActiveBoon(pickId) {
   const index = boonState.activeBoons.findIndex(b => b.pickId === pickId);
@@ -220,5 +252,5 @@ export function removeActiveBoon(pickId) {
 
 export function resetBoons() {
   boonState.activeBoons.length = 0;
-  nextPickId = 1; // NEW — pickIds are per-run, same as everything else this resets
+  nextPickId = 1;
 }

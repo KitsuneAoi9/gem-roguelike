@@ -62,21 +62,20 @@ export function shopTierForLevel(level) {
 
 /**
  * Rolls a fresh offer into boonShopState and clears the "already
- * bought this visit" list. Call once, right as the shop dialog opens.
+ * bought this visit" list.
  *
- * Reuses boon.js's generateEqualWeightBoonOffer() — same
- * maxOccurrences/gem-unlock gate the free level-up dialog uses (the
- * shop and the free pick share one pool of "how many times has this
- * exact boon been taken"), just equal-weighted instead of
- * rarity-weighted, and with board-shape boons filtered out (see
- * PLACEMENT_ONLY_KINDS above).
+ * CHANGED THIS ROUND — takes `clearedLevel` (the level whose shop
+ * this is), so the shop's rarity settings are judged against the
+ * right level even mid-way through a skipped-level reward queue.
  *
+ * @param {number} clearedLevel
  * @returns {void}
  */
-export function rollBoonShopOffer() {
+export function rollBoonShopOffer(clearedLevel) {
   boonShopState.offer = generateEqualWeightBoonOffer(
     BOON_SHOP_OFFER_COUNT,
-    def => !PLACEMENT_ONLY_KINDS.has(def.effect?.kind)
+    def => !PLACEMENT_ONLY_KINDS.has(def.effect?.kind),
+    clearedLevel
   );
   boonShopState.purchasedIds = [];
 }

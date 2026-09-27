@@ -1,15 +1,21 @@
 // ============================================================
 // CONSUMABLE.JS (gameplay) — inventory management + the board-
-// mutation EFFECTS of Pickaxe/Dynamite/Dice. Reads/writes
-// consumableState but owns none of the state itself — same split as
-// boon.js/tiles.js. Golden Ticket and Resurrection Cross don't touch
-// the board at all, so their logic lives directly in main.js instead
-// (a turn counter and a deadlock-time auto-consume, respectively) —
-// nothing here needs to know about either one.
+// mutation EFFECTS of Pickaxe/Dynamite/Dice.
+//
+// CHANGED THIS ROUND — triggerRandomHyperstarWipe() used to be defined
+// locally in this file. It's now defined in special_gem.js instead
+// (that file's own chain-reaction BFS needed the exact same function,
+// and special_gem.js can't import FROM this file without creating a
+// cycle, since this file already imports FROM special_gem.js) — so
+// this file just imports it from there now, same single source of
+// truth, zero behavior change.
 // ============================================================
 
-import { SIZE, BLOCKED, GEM_TYPES_TOTAL, rand } from './board.js';
-import { laserRowBlastCells, laserColBlastCells, dischargerBlastCells } from './special_gem.js';
+import { SIZE, BLOCKED, OBSIDIAN, GEM_TYPES_TOTAL, rand } from './board.js';
+import {
+  laserRowBlastCells, laserColBlastCells, dischargerBlastCells,
+  triggerRandomHyperstarWipe, // CHANGED — now imported, not defined here
+} from './special_gem.js';
 import { CONSUMABLE_BELT_SIZE } from '../resources/consumable/consumable.js';
 import { consumableState } from '../resources/consumable/consumable_state.js';
 import { specialGemState } from '../resources/special%20gem/special_gem_state.js';
@@ -31,11 +37,7 @@ export function hasBeltSpace() {
 }
 
 /**
- * Adds one consumable to the belt. The caller (main.js's shop
- * purchase handler) is responsible for checking hasBeltSpace() and
- * deducting score FIRST — this trusts it's being called validly,
- * same "logic file doesn't re-validate what the caller already
- * validated" convention pickBoon()/grantCurse() follow.
+ * Adds one consumable to the belt.
  *
  * @param {string} type - a CONSUMABLE_TYPE value.
  * @returns {object} the new inventory entry.
@@ -47,15 +49,10 @@ export function addConsumableToInventory(type) {
 }
 
 /**
- * Removes one specific consumable from the belt by its pickId (NOT by
- * type — the player could hold two of the same type in different
- * slots). Call this the moment an active-use consumable is SPENT,
- * whether or not its effect actually did anything useful — a
- * consumable never gets refunded once activated (per design: no
- * discard option either, for now).
+ * Removes one specific consumable from the belt by its pickId.
  *
  * @param {number} pickId
- * @returns {object|null} the removed entry, or null if not found.
+ * @returns {object|null}
  */
 export function removeConsumableFromInventory(pickId) {
   const index = consumableState.inventory.findIndex(e => e.pickId === pickId);
@@ -65,9 +62,7 @@ export function removeConsumableFromInventory(pickId) {
 }
 
 /**
- * The first held inventory entry of a given type, if any — used to
- * auto-consume a Resurrection Cross without main.js needing to know
- * its pickId ahead of time (it only knows "does the player have one").
+ * The first held inventory entry of a given type, if any.
  *
  * @param {string} type
  * @returns {object|null}
@@ -87,46 +82,12 @@ export function resetConsumables() {
 // ============================================================
 
 /**
- * Every cell a Hyperspace Star wipe clears when triggered by a
- * consumable rather than a swap — same "clear every gem of one
- * color" rule triggerHyperstarSingle() (special_gem.js) already uses
- * for the swap-activated version, just with the target color picked
- * RANDOMLY here (there's no second swapped-with gem to take the
- * color from). Also skips any OTHER Hyperstar caught in the sweep,
- * for the exact same "Hyperstar is never incidentally destroyed"
- * reason triggerHyperstarSingle() already documents (Part 6).
- *
- * @param {number[][]} grid
- * @returns {[number, number][]} every cell cleared, board-wide.
- */
-function triggerRandomHyperstarWipe(grid) {
-  const targetGemType = rand(GEM_TYPES_TOTAL);
-  const cleared = [];
-  for (let r = 0; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) {
-      if (specialGemState.grid[r][c] === SPECIAL_GEM_TYPE.HYPERSTAR) continue;
-      if (grid[r][c] === targetGemType) cleared.push([r, c]);
-    }
-  }
-  return cleared;
-}
-
-/**
  * Expands an initial set of consumable-targeted cells into everything
- * that ACTUALLY gets cleared once chain reactions are accounted for
- * — mirrors special_gem.js's resolveSpecialGems() BFS, but starting
- * from an arbitrary cell set instead of a formed match. Any Laser/
- * Discharger caught in the set detonates its own blast shape (reusing
- * the exact same functions special_gem.js already exports for this);
- * a Hyperstar caught in the set instead triggers a random-color board
- * wipe — matches "if it hit a star, the star destroys all one random
- * gem type on the board" for BOTH Pickaxe and Dynamite.
+ * that ACTUALLY gets cleared once chain reactions are accounted for.
  *
  * @param {number[][]} grid
- * @param {[number, number][]} initialCells - the cell(s) the
- *   consumable directly targets (one cell for Pickaxe, a 3x3 block
- *   for Dynamite).
- * @returns {[number, number][]} every cell actually cleared.
+ * @param {[number, number][]} initialCells
+ * @returns {[number, number][]}
  */
 function expandConsumableBlast(grid, initialCells) {
   const cleared = new Set(initialCells.map(([r, c]) => `${r},${c}`));
@@ -140,7 +101,7 @@ function expandConsumableBlast(grid, initialCells) {
 
     const [r, c] = key.split(',').map(Number);
     const specialType = specialGemState.grid[r][c];
-    if (!specialType) continue; // a plain gem — nothing further to chain
+    if (!specialType) continue;
 
     if (specialType === SPECIAL_GEM_TYPE.HYPERSTAR) {
       // Fold the random wipe's cells into the SAME cleared set so
@@ -174,15 +135,12 @@ function expandConsumableBlast(grid, initialCells) {
 }
 
 /**
- * Pickaxe: destroys exactly one targeted cell, then lets
- * expandConsumableBlast() handle whatever chain reaction that
- * triggers if the targeted cell held a special gem.
+ * Pickaxe: destroys exactly one targeted cell.
  *
  * @param {number[][]} grid
  * @param {number} row
  * @param {number} col
- * @returns {[number, number][]} every cell cleared (empty array if
- *   the target was off-board/blocked/already empty).
+ * @returns {[number, number][]}
  */
 export function triggerPickaxe(grid, row, col) {
   if (!inBounds(row, col) || grid[row][col] == null) return [];
@@ -190,15 +148,12 @@ export function triggerPickaxe(grid, row, col) {
 }
 
 /**
- * Dynamite: destroys a 3x3 area centered on the targeted cell (any
- * cell off the edge of the board or already blocked is just skipped
- * — same "clip, don't reject" spirit as tiles.js's expandBoard()),
- * then lets expandConsumableBlast() handle chain reactions.
+ * Dynamite: destroys a 3x3 area centered on the targeted cell.
  *
  * @param {number[][]} grid
  * @param {number} row
  * @param {number} col
- * @returns {[number, number][]} every cell cleared.
+ * @returns {[number, number][]}
  */
 export function triggerDynamite(grid, row, col) {
   const initial = [];
@@ -212,31 +167,30 @@ export function triggerDynamite(grid, row, col) {
 }
 
 /**
- * Dice: shuffles every USABLE cell's underlying grid color among
- * themselves — a real permutation of the CURRENT values (Fisher-
- * Yates), not fresh random re-rolls. The exact multiset of colors on
- * the board is unchanged, just redistributed. specialGemState.grid is
- * left completely untouched: a special gem stays on exactly the cell
- * it was already on — only what color the board now shows underneath
- * it can change (a Laser sitting on Ruby might end up sitting on
- * Diamond after the shuffle; its identity as "a Laser" doesn't move).
- *
- * Mutates `grid` in place. Does NOT check for resulting matches —
- * that's the caller's job (main.js runs the normal resolveMatches()
- * pipeline right after, so any matches the shuffle happens to create
- * cascade and score exactly like any other match would).
+ * Dice: shuffles only a 3x3 area centered on the target click (same
+ * footprint/edge-clipping as Dynamite). Fisher-Yates shuffle of just
+ * that area's CURRENT colors — specialGemState is untouched, and
+ * Obsidian cells are excluded from the shuffle pool entirely.
  *
  * @param {number[][]} grid
+ * @param {number} row
+ * @param {number} col
  * @returns {void}
  */
-export function triggerDiceShuffle(grid) {
+export function triggerDiceShuffleArea(grid, row, col) {
   const positions = [];
-  for (let r = 0; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) {
-      if (grid[r][c] !== BLOCKED) positions.push([r, c]);
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      const r = row + dr, c = col + dc;
+      // Same "clip, don't reject" edge handling as Dynamite: a cell
+      // outside the board, BLOCKED, or Obsidian is just skipped.
+      if (inBounds(r, c) && grid[r][c] !== BLOCKED && grid[r][c] !== OBSIDIAN) {
+        positions.push([r, c]);
+      }
     }
   }
 
+  // Fisher-Yates shuffle of just these cells' colors among themselves.
   for (let i = positions.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     const [r1, c1] = positions[i];

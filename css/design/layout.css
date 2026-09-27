@@ -135,6 +135,10 @@ body {
   box-shadow: inset 0 0 0 1px var(--vein);
 }
 
+.cell--obsidian {
+  cursor: default;
+}
+
 /* NEW — a ghost cell is a blocked cell the player can click right now
    to grow the board into it, shown only while an expand-board boon's
    placement is active (see render.js's `ghostCells` option). Dashed
@@ -240,7 +244,7 @@ button#reset:hover {
   top: 32px;
   left: 20px;
   width: 200px;
-  max-height: calc(100vh - 64px);
+  height: calc(100vh - 64px); /* CHANGED — was max-height. Now always fills the full available viewport height, same as .history-panel; overflow-y: auto below only ever shows a scrollbar once content actually exceeds this, it no longer also controls the box's own resting size. */
   overflow-y: auto;
   background: var(--rock);
   border: 1px solid var(--vein);
@@ -377,6 +381,8 @@ button#reset:hover {
 .event-inline-name--epic       { color: var(--rarity-epic); }
 .event-inline-name--legendary  { color: var(--rarity-legendary); }
 .event-inline-name--curse      { color: var(--curse-color); }
+.event-inline-name--consumable { color: var(--gold); } 
+/* NEW — consumable names (e.g. Resurrection Cross) get the same flat gold treatment their belt/shop cards already use, distinct from any rarity color or the curse red. */
 
 /* ============================================================
    INFO TOOLTIP (side-stats labels)
