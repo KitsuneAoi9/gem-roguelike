@@ -162,6 +162,13 @@
   margin-top: 10px;
   padding-top: 8px;
   border-top: 1px solid var(--vein);
+  /* NEW — lets the shop's price sit on the same row as the rarity
+     badge (the level-up dialog's cards just leave the right side
+     empty, which is fine — flex with one child still left-aligns it
+     via justify-content's default unless a second child is present). */
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .boon-card-rarity {
@@ -212,20 +219,29 @@
    ============================================================ */
 
 .shop-dialog-box {
-  /* Widened to fit 5 cards in one row with no wrap: 5 x 160px card +
-     4 x 14px gap + 2 x 32px dialog padding = 920px exactly — a touch
-     of margin isn't added here since the dialog box itself has no
-     hard outer constraint stopping it from being exactly this wide. */
-  max-width: 940px;
+  /* CHANGED — the boon cards are now full-size `.boon-card` elements
+     (230px wide) reused from the level-up dialog, not the old compact
+     `.shop-card` (160px). Fitting 5 of those in one row would need
+     ~1270px, which is excessive for a shop dialog — instead this
+     fits 3 per row (3 x 230px + 2 x 14px gap + 2 x 32px padding =
+     782px) and lets .shop-choices wrap the rest onto further rows.
+     Also caps the whole dialog's height and scrolls internally, since
+     it can now run considerably taller (boon cards + consumable
+     squares + Customer Service, all stacked). */
+  max-width: 800px;
+  max-height: 90vh;
+  overflow-y: auto;
 }
-
+ 
 .shop-choices {
   display: flex;
-  /* CHANGED — was flex-wrap: wrap (allowed a 2nd row). Now nowrap so
-     all 5 cards are forced onto one row, per design ask #3. */
-  flex-wrap: nowrap;
+  /* CHANGED — was nowrap (forced 5-in-a-row for the old compact
+     cards). Now wraps, since the full-size `.boon-card` cards no
+     longer fit 5-wide in a reasonably-sized dialog. */
+  flex-wrap: wrap;
   gap: 14px;
   margin-top: 12px;
+  justify-content: center;
 }
 
 .shop-card {
@@ -391,8 +407,221 @@
   text-align: center;
 }
 
-/* Consumables have no rarity, so they get a flat gold border instead
-   of a rarity-colored one — distinct from a boon card at a glance. */
-.consumable-shop-card {
+/* ============================================================
+   CONSUMABLE SHOP SQUARES
+   Belt-style icon squares (see layout.css's .belt-slot for the
+   original), with the same hover-tooltip treatment, but the price is
+   ALWAYS visible underneath (not hover-only) — main.js builds each as
+   a small <div class="consumable-shop-item"> wrapping the square +
+   a price line.
+   ============================================================ */
+.consumable-shop-choices {
+  display: flex;
+  gap: 14px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+ 
+.consumable-shop-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+ 
+.consumable-shop-square {
+  width: 69px;
+  height: 69px;
+  border-radius: 4px;
+  background: var(--rock-deep);
+  border: 2px solid var(--gold);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative; /* anchor for the hover tooltip */
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+ 
+.consumable-shop-icon {
+  width: 78%;
+  height: 78%;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+ 
+.consumable-shop-square--unaffordable {
+  opacity: 0.4;
+  cursor: default;
+}
+ 
+/* Same tooltip rule as .belt-slot (layout.css), extended to also
+   cover this new square — kept as its own selector here (rather than
+   editing layout.css) to avoid touching a file this round doesn't
+   otherwise need. */
+.consumable-shop-square[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  margin-top: 8px;
+  width: 220px;
+  background: var(--rock-deep);
+  border: 1px solid var(--vein);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--paper);
+  text-align: left;
+  white-space: normal;
+  z-index: 30;
+  box-shadow: 0 10px 24px -10px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+ 
+/* ============================================================
+   CUSTOMER SERVICE SECTION
+   Two plain cards (Curse Removal Service / Limited Edition Boons
+   Sale Service) — deliberately simpler styling than the boon/shop
+   cards, since these are one-time-per-visit service actions, not
+   items with a rarity.
+   ============================================================ */
+.customer-service-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+ 
+.customer-service-card {
+  border: 2px solid var(--vein);
+  border-radius: 4px;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, opacity 0.15s ease;
+}
+ 
+.customer-service-card:hover {
   border-color: var(--gold);
+}
+ 
+.customer-service-card h4 {
+  margin: 0 0 4px;
+  font-family: 'Georgia', 'Iowan Old Style', serif;
+  font-weight: 400;
+  font-size: 0.92rem;
+  color: var(--paper);
+}
+ 
+.customer-service-card p {
+  margin: 0 0 8px;
+  font-size: 0.78rem;
+  color: var(--paper-dim);
+}
+ 
+.customer-service-card--disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+ 
+/* --- the curse-removal picker list, shown INSTEAD of the two cards
+   above once "Curse Removal Service" is clicked (main.js toggles
+   this via curseRemovalPickerOpen) --- */
+.curse-picker-heading {
+  font-size: 0.82rem;
+  color: var(--paper);
+  margin: 4px 0 8px;
+}
+ 
+.curse-picker-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--vein);
+  font-size: 0.78rem;
+  color: var(--paper-dim);
+}
+ 
+.curse-picker-row button {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.72rem;
+  background: none;
+  border: 1px solid var(--vein);
+  color: var(--paper);
+  padding: 6px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+ 
+.curse-picker-row button:hover:not(:disabled) {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+ 
+.curse-picker-row button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+ 
+.curse-picker-cancel {
+  margin-top: 10px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.75rem;
+  background: none;
+  border: 1px solid var(--vein);
+  color: var(--paper);
+  padding: 8px 16px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+ 
+.curse-picker-cancel:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+/* ============================================================
+   ADD THIS to the end of css/design/dialog.css.
+ 
+   WARMONGER / ADVENTURE JUNKIE — LOCKED EVENT CHOICE
+   Applied to an Elite/Challenge dialog's Decline/Leave-equivalent
+   button once the matching boon is held: the button stays visible
+   (per design) but reads as struck-through and inert — no hover glow,
+   no click. The explanatory note sits right after it in the same
+   flex-wrap row; `width: 100%` forces it onto its own line under
+   .event-choices' flex-wrap layout regardless of how many buttons
+   came before it.
+   ============================================================ */
+.event-choice-locked {
+  text-decoration: line-through;
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none; /* belt-and-suspenders — no click handler is attached anyway, but this also blocks the hover glow */
+}
+ 
+.event-choice-lock-note {
+  width: 100%;
+  color: #d9695a; /* reuses the same red already used for a negative history line */
+  font-size: 0.72rem;
+  text-align: center;
+  margin-top: -4px;
+}
+ 
+/* ============================================================
+   DEADLOCK-CHOICE DIALOG
+   The Resurrection Cross's new Yes/No prompt — a simple two-button
+   row, same base .dialog-box look as every other small dialog
+   (lose-dialog, levelup-dialog) already uses.
+   ============================================================ */
+.deadlock-dialog-choices {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
 }

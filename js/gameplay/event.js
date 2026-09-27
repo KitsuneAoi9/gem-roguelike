@@ -2,15 +2,30 @@
 // EVENT.JS (gameplay) — Encounter/Elite/Challenge trigger, offer
 // building, and outcome resolution.
 //
-// REWORKED THIS ROUND — the Elite section is a full rewrite. The old
-// single-shape Gem Elitist is gone; three structurally different
-// fights now share one generalized engine driven entirely by each
-// ELITE_POOL entry's `winCondition`/`onWin`/`onLose`/`decline` tagged
-// unions (see resources/event/event.js's file header). Encounter/
-// Challenge sections below are UNCHANGED from the prior round.
+// CHANGED THIS ROUND — the Challenge section: resolveChallengeOutcome()
+// is REPLACED by checkChallengeLevelClear(), which can now return
+// null ("still in progress, say nothing yet — this challenge spans
+// multiple levels and not all of them have cleared cleanly"). See its
+// doc comment below for the full before/after.
+//
+// NEW THIS ROUND:
+//   - applyChallengeDecayIfDue(currentScore) — A Test of Endurance's
+//     recurring score decay. Checked at cascade-settle time (main.js),
+//     NOT a live wall-clock timer.
+//   - checkChallengeLevelClear() now ALSO checks a time limit
+//     (`def.timeLimitMs`), resolved the exact same way Elite's
+//     time_race already is: only evaluated at the moment the level
+//     actually clears (score reaches target) — there is no
+//     independent timeout that fires on its own while the player is
+//     just slow; if they never clear the level at all, the challenge
+//     simply never resolves through this path (identical precedent
+//     to how Boon Hoarder's time_race already behaves).
+//   - checkChallengeLevelClear() now supports `def.useEventOnlyRewardPool`:
+//     the win reward is drawn from BOON_POOL entries flagged in
+//     EVENT_ONLY_BOON_IDS instead of a rarity-based roll.
 // ============================================================
 
-import { BOON_POOL, BOON_RARITY } from '../resources/boon/boon.js';
+import { BOON_POOL, BOON_RARITY, EVENT_ONLY_BOON_IDS } from '../resources/boon/boon.js';
 import { gemUnlockState } from '../resources/gem/gem_unlock_state.js';
 import { activeEventState, eventState } from '../resources/event/event_state.js';
 import {
@@ -38,21 +53,12 @@ function markEventSeen(id) {
   }
 }
 
-/** Resolves a value that might be a plain value OR a function taking `...args` — used for text fields that need to reflect a specific outcome (e.g. which boons were granted/lost). */
+/** Resolves a value that might be a plain value OR a function taking `...args` — used for text fields that need to reflect a specific outcome. */
 function resolveMaybeFn(value, ...args) {
   return typeof value === 'function' ? value(...args) : value;
 }
 
-/**
- * NEW — minimal HTML-attribute escaping for description text before
- * it gets spliced into a data-tooltip="..." attribute below. None of
- * the current boon/curse descriptions actually contain a literal
- * quote/angle-bracket, but this costs nothing and stops a future
- * description from silently breaking the markup.
- *
- * @param {string} str
- * @returns {string}
- */
+/** Minimal HTML-attribute escaping for description text before it gets spliced into a data-tooltip="..." attribute below. */
 function escapeHtmlAttr(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -62,43 +68,49 @@ function escapeHtmlAttr(str) {
 }
 
 /**
- * NEW — builds a small dashed-underline, tooltip-bearing, rarity-
- * colored <span> for a boon or curse name, meant to be spliced
- * directly into event flavor/result text wherever a SPECIFIC boon or
- * curse is named (Gem Mole's trade, Lost Miner's absorb, Boon
- * Hoarder's win/lose/decline, the side-stats Curses list, etc.).
+ * Builds a small dashed-underline, tooltip-bearing, rarity-colored
+ * <span> for a boon or curse name, meant to be spliced directly into
+ * event flavor/result text wherever a SPECIFIC boon or curse is
+ * named.
  *
- * Lives here (not in main.js) because this file already owns
- * building every other piece of this narrative text — main.js
- * imports and reuses this SAME function for the two call sites it
- * builds directly (Gem Mole/Lost Miner), instead of duplicating the
- * markup logic a second time in two places.
- *
- * Pure string-building, no DOM access at all — description text is
- * static game data (never user input), so this is safe to embed
- * directly (through escapeHtmlAttr(), belt-and-suspenders).
- *
- * @param {object} def - a BOON_POOL entry OR a CURSE_POOL entry —
- *   both shapes carry `.name`/`.description`, which is all this needs.
- * @param {boolean} [isCurse=false] - true for a curse. Curses have no
- *   `rarity` field of their own, so they always get the single
- *   dedicated curse color instead of a rarity-based one.
+ * @param {object} def - a BOON_POOL entry OR a CURSE_POOL entry.
+ * @param {boolean} [isCurse=false]
  * @returns {string} an HTML string. The CALLER is responsible for
- *   rendering it via `.innerHTML` (never `.textContent`) wherever it
- *   ends up — see main.js's showEventResult()/renderHistoryPanel()/
- *   renderCursePanel().
+ *   rendering it via `.innerHTML`.
  */
 export function formatNamedEffectSpan(def, isCurse = false) {
   const rarityClass = isCurse ? 'event-inline-name--curse' : `event-inline-name--${def.rarity}`;
   return `<span class="event-inline-name ${rarityClass}" data-tooltip="${escapeHtmlAttr(def.description)}">${def.name}</span>`;
 }
 
-/** Every BOON_POOL entry of a given rarity safe to hand out as a random event reward. */
+/** Every BOON_POOL entry of a given rarity safe to hand out as a random event reward.
+ *
+ * @param {number} rarity
+ * @param {boolean} bypassCap
+ * @returns {object[]}
+ */
 function candidatePoolForRarity(rarity, bypassCap) {
   return BOON_POOL.filter(def => {
     if (def.rarity !== rarity) return false;
     if (PLACEMENT_ONLY_KINDS.has(def.effect?.kind)) return false;
     if (def.effect?.gem && !gemUnlockState.unlocked[def.effect.gem]) return false;
+    if (!bypassCap && !isBoonAvailable(def)) return false;
+    return true;
+  });
+}
+
+/**
+ * Every BOON_POOL entry flagged as event-only (EVENT_ONLY_BOON_IDS)
+ * that's currently available to grant. Used by checkChallengeLevelClear()
+ * for a `def.useEventOnlyRewardPool` challenge, instead of the normal
+ * rarity-based candidatePoolForRarity() above.
+ *
+ * @param {boolean} bypassCap
+ * @returns {object[]}
+ */
+function candidatesFromEventOnlyPool(bypassCap) {
+  return BOON_POOL.filter(def => {
+    if (!EVENT_ONLY_BOON_IDS.has(def.id)) return false;
     if (!bypassCap && !isBoonAvailable(def)) return false;
     return true;
   });
@@ -144,7 +156,6 @@ function hasValidChallengeReward() {
  */
 function isEncounterEligible(def, currentScore) {
   if (eventState.seenEventIds.includes(def.id)) return false;
-
   if (def.kind === 'trade') return hasValidEncounterCandidate();
   if (def.kind === 'gamble') return currentScore > 0;
   if (def.kind === 'help_or_absorb') return true;
@@ -159,8 +170,20 @@ function hasEligibleElite() {
   return ELITE_POOL.some(def => !eventState.seenEventIds.includes(def.id));
 }
 
+/**
+ * A challenge whose reward comes from the event-only pool
+ * (`useEventOnlyRewardPool`) is eligible even if that pool happens to
+ * be exhausted right now — checkChallengeLevelClear() already
+ * tolerates an empty pool (falls back to loseText/failText), so
+ * there's no "would this even have anything to give" pre-check
+ * needed for it, unlike Silent Vein's normal-rarity-pool requirement.
+ */
 function hasEligibleChallenge() {
-  return CHALLENGE_POOL.some(def => !eventState.seenEventIds.includes(def.id)) && hasValidChallengeReward();
+  return CHALLENGE_POOL.some(def => {
+    if (eventState.seenEventIds.includes(def.id)) return false;
+    if (def.useEventOnlyRewardPool) return true;
+    return hasValidChallengeReward();
+  });
 }
 
 /**
@@ -195,7 +218,7 @@ export function tryTriggerEvent(currentScore) {
 }
 
 // ============================================================
-// ENCOUNTER (UNCHANGED this round)
+// ENCOUNTER
 // ============================================================
 
 /**
@@ -249,7 +272,7 @@ export function resolveEncounterDecline() {
 }
 
 // ============================================================
-// FORTUNE'S FOLLY (UNCHANGED this round)
+// FORTUNE'S FOLLY
 // ============================================================
 
 /**
@@ -298,7 +321,7 @@ export function payFortunesFollyAndLeave(currentScore, percent) {
 }
 
 // ============================================================
-// LOST MINER (UNCHANGED this round)
+// LOST MINER
 // ============================================================
 
 /**
@@ -328,12 +351,8 @@ export function resolveLostMinerHelp(currentScore, def) {
  *   value" phrase in that case.
  */
 export function resolveLostMinerAbsorb() {
-const offer = generateBoonOffer(1);
+  const offer = generateBoonOffer(1);
 
-  // CHANGED — used to return just the boon's NAME string
-  // (grantedBoonName); now returns the full DEF, so main.js can build
-  // the rich styled span (formatNamedEffectSpan()) without having to
-  // reach back into BOON_POOL a second time to re-find it.
   let grantedBoonDef = null;
   if (offer.length > 0) {
     const rewardDef = offer[0];
@@ -355,12 +374,11 @@ const offer = generateBoonOffer(1);
   const activeCurse = grantCurse(curseDef.id);
   activeCurse.appliedEffect = applyBoonEffect(curseDef);
 
-  // CHANGED — returns the curse's full def too, same reasoning.
   return { grantedBoonDef, curseDef };
 }
 
 // ============================================================
-// ELITE — generalized engine (REWRITTEN this round)
+// ELITE — generalized engine
 // ============================================================
 
 /** Every unlocked active gem id — the pool gem_cap/gem_subscore_race pick their target from ("a random unlocked gem type"). */
@@ -463,10 +481,6 @@ function applyEliteOutcomeEffect(effectSpec, currentScore) {
         const activeBoon = effectSpec.bypassCap ? grantBoonBypassingCap(rewardDef.id) : pickBoon(rewardDef.id);
         if (activeBoon) {
           activeBoon.appliedEffect = applyBoonEffect(rewardDef);
-          // CHANGED — push the rich, rarity-colored/tooltipped span
-          // instead of a bare name string. Whatever winText/loseText
-          // interpolates this into (Boon Hoarder's flavor text) will
-          // render it styled automatically once shown via innerHTML.
           grantedNames.push(formatNamedEffectSpan(rewardDef));
         }
       }
@@ -479,7 +493,6 @@ function applyEliteOutcomeEffect(effectSpec, currentScore) {
         if (boonState.activeBoons.length === 0) break;
         const victim = boonState.activeBoons[Math.floor(Math.random() * boonState.activeBoons.length)];
         const victimDef = BOON_POOL.find(b => b.id === victim.id);
-        // CHANGED — same styled-span treatment as above.
         if (victimDef) removedNames.push(formatNamedEffectSpan(victimDef));
         reverseBoonEffect(victim);
         removeActiveBoon(victim.pickId);
@@ -561,7 +574,7 @@ export function declineElite(def, currentScore) {
 }
 
 /**
- * NEW — call this after EVERY cascade step (normal match resolution
+ * Call this after EVERY cascade step (normal match resolution
  * AND every swap-activated combo) while an Elite fight is active, so
  * gem_cap/gem_subscore_race tracking stays live. No-ops instantly if
  * no Elite is active or the active Elite doesn't use a gem-tracking
@@ -674,7 +687,7 @@ export function resolveEliteOutcome(currentScore) {
 }
 
 // ============================================================
-// CHALLENGE (UNCHANGED this round)
+// CHALLENGE
 // ============================================================
 
 export function pickChallengeDef() {
@@ -690,11 +703,41 @@ export function getActiveChallengeDef() {
   return CHALLENGE_POOL.find(d => d.id === activeEventState.challengeDefId) || null;
 }
 
+/**
+ * CHANGED THIS ROUND — also initializes the decay-tracking fields
+ * (`def.decayEffect`) AND the new time-limit fields (`def.timeLimitMs`).
+ * Both stay at their zeroed/null defaults for any def that doesn't
+ * declare them (e.g. Silent Vein has neither).
+ *
+ * @param {object} def
+ * @returns {void}
+ */
 export function startChallenge(def) {
   activeEventState.type = EVENT_TYPE.CHALLENGE;
   activeEventState.challengeDefId = def.id;
   activeEventState.challengeForLevel = progressionState.level;
   activeEventState.challengeDetonated = false;
+  activeEventState.challengeLevelsRemaining = def.durationLevels || 1;
+
+  if (def.decayEffect) {
+    activeEventState.challengeDecayPercent = def.decayEffect.percent;
+    activeEventState.challengeDecayIntervalMs = def.decayEffect.intervalMs;
+    activeEventState.challengeLastDecayAt = Date.now();
+  } else {
+    activeEventState.challengeDecayPercent = 0;
+    activeEventState.challengeDecayIntervalMs = 0;
+    activeEventState.challengeLastDecayAt = null;
+  }
+
+  // NEW — time-limit tracking, same "started now, checked only at
+  // level-clear time" convention as Elite's time_race.
+  if (def.timeLimitMs) {
+    activeEventState.challengeStartedAt = Date.now();
+    activeEventState.challengeTimeLimitMs = def.timeLimitMs;
+  } else {
+    activeEventState.challengeStartedAt = null;
+    activeEventState.challengeTimeLimitMs = 0;
+  }
 }
 
 function clearChallengeState() {
@@ -702,10 +745,16 @@ function clearChallengeState() {
   activeEventState.challengeDefId = null;
   activeEventState.challengeForLevel = null;
   activeEventState.challengeDetonated = false;
+  activeEventState.challengeLevelsRemaining = 0;
+  activeEventState.challengeDecayPercent = 0;
+  activeEventState.challengeDecayIntervalMs = 0;
+  activeEventState.challengeLastDecayAt = null;
+  activeEventState.challengeStartedAt = null;
+  activeEventState.challengeTimeLimitMs = 0;
 }
 
 export function declineChallenge() {
-  // Intentionally empty.
+  // Intentionally empty — main.js decides whether to show declineText.
 }
 
 export function markChallengeDetonation() {
@@ -714,34 +763,124 @@ export function markChallengeDetonation() {
   }
 }
 
-export function resolveChallengeOutcome() {
+/**
+ * A Test of Endurance's recurring score decay. Call this once every
+ * time a cascade fully settles (main.js's resolveMatches()) — NOT a
+ * live wall-clock timer; evaluated lazily, computing however many
+ * whole `challengeDecayIntervalMs` periods have elapsed since the
+ * last check (could be more than one) and applying that many
+ * COMPOUNDING deductions, advancing `challengeLastDecayAt` by exact
+ * interval steps each time so no partial elapsed time is ever
+ * silently dropped between checks.
+ *
+ * Safe to call unconditionally every settle; returns 0 instantly if
+ * not applicable.
+ *
+ * @param {number} currentScore
+ * @returns {number} total amount to deduct from score (0 if none due).
+ */
+export function applyChallengeDecayIfDue(currentScore) {
+  if (activeEventState.type !== EVENT_TYPE.CHALLENGE) return 0;
+  if (!activeEventState.challengeDecayPercent || !activeEventState.challengeDecayIntervalMs) return 0;
+  if (activeEventState.challengeLastDecayAt == null) return 0;
+
+  const now = Date.now();
+  let elapsed = now - activeEventState.challengeLastDecayAt;
+  let workingScore = currentScore;
+  let totalDeducted = 0;
+
+  while (elapsed >= activeEventState.challengeDecayIntervalMs) {
+    const tickAmount = Math.round(workingScore * activeEventState.challengeDecayPercent);
+    totalDeducted += tickAmount;
+    workingScore -= tickAmount;
+    elapsed -= activeEventState.challengeDecayIntervalMs;
+    activeEventState.challengeLastDecayAt += activeEventState.challengeDecayIntervalMs;
+  }
+
+  return totalDeducted;
+}
+
+/**
+ * NEW — resolves the active Challenge as an immediate LOSS with no
+ * reward, and clears its state. Used by main.js's showNoMovesDialog()
+ * when a challenge flagged `failsOnDeadlock` (A Test of Endurance) is
+ * active at the moment the stuck-board game-over actually fires — the
+ * run ending IS this challenge's loss condition, per design; this
+ * just makes sure its state doesn't linger into whatever happens next
+ * (a "start over" already resets everything anyway via resetEvents(),
+ * but this keeps the moment-of-loss bookkeeping correct regardless).
+ *
+ * @returns {void}
+ */
+export function forceFailChallenge() {
+  clearChallengeState();
+}
+
+/**
+ * Call this once per level actually cleared while a Challenge is
+ * active. Decides whether the challenge resolves NOW or should keep
+ * silently tracking into the next level.
+ *
+ * CHANGED THIS ROUND — a def with `timeLimitMs` (A Test of Endurance)
+ * now ALSO checks elapsed time against that limit at this exact
+ * moment, BEFORE granting any reward: if the level cleared too slow,
+ * it resolves as a loss (via `def.loseText ?? def.failText`) even
+ * though the level itself was technically cleared. This mirrors
+ * Elite's time_race resolution timing exactly — see
+ * resolveEliteOutcome() above — rather than introducing a separate,
+ * independently-firing timeout mechanism.
+ *
+ * Also supports `def.useEventOnlyRewardPool` (see candidatesFromEventOnlyPool()).
+ *
+ * @returns {{ succeeded: boolean, resultText: string, name: string } | null}
+ *   null means "still in progress, say nothing yet."
+ */
+export function checkChallengeLevelClear() {
   if (activeEventState.type !== EVENT_TYPE.CHALLENGE) return null;
 
   const def = CHALLENGE_POOL.find(d => d.id === activeEventState.challengeDefId);
-  const detonated = activeEventState.challengeDetonated;
+  if (!def) { clearChallengeState(); return null; } // shouldn't happen, safety net
 
-  let succeeded = false;
-  let resultText = null;
+  if (activeEventState.challengeDetonated) {
+    // Failed at some point during the window — resolve as a loss
+    // right now, regardless of how many levels were left to go.
+    const name = def.name;
+    clearChallengeState();
+    return { succeeded: false, resultText: def.failText ?? def.loseText, name };
+  }
 
-  if (!detonated) {
-    const pool = candidatePoolForRarity(def.rewardRarity, false);
-    if (pool.length > 0) {
-      for (let i = 0; i < def.rewardCount && pool.length > 0; i++) {
-        const rewardDef = pool[Math.floor(Math.random() * pool.length)];
-        const activeBoon = pickBoon(rewardDef.id);
-        if (activeBoon) activeBoon.appliedEffect = applyBoonEffect(rewardDef);
-      }
-      succeeded = true;
-      resultText = def.winText;
+  activeEventState.challengeLevelsRemaining -= 1;
+  if (activeEventState.challengeLevelsRemaining > 0) {
+    return null;
+  }
+
+  // NEW — time-limit check, evaluated right here at level-clear time.
+  if (activeEventState.challengeTimeLimitMs > 0) {
+    const elapsedMs = Date.now() - activeEventState.challengeStartedAt;
+    if (elapsedMs > activeEventState.challengeTimeLimitMs) {
+      const name = def.name;
+      clearChallengeState();
+      return { succeeded: false, resultText: def.loseText ?? def.failText, name };
     }
   }
 
-  // NEW — same reasoning as resolveEliteOutcome() above: hand back
-  // the def's name for the new result dialog to use as its title.
-  const name = def.name;
+  let resultText = def.failText ?? def.loseText;
+  const pool = def.useEventOnlyRewardPool
+    ? candidatesFromEventOnlyPool(false)
+    : candidatePoolForRarity(def.rewardRarity, false);
 
+  if (pool.length > 0) {
+    for (let i = 0; i < def.rewardCount && pool.length > 0; i++) {
+      const rewardDef = pool[Math.floor(Math.random() * pool.length)];
+      const activeBoon = pickBoon(rewardDef.id);
+      if (activeBoon) activeBoon.appliedEffect = applyBoonEffect(rewardDef);
+    }
+    resultText = def.winText;
+  }
+
+  const name = def.name;
   clearChallengeState();
-  return { succeeded, resultText, name };
+  return { succeeded: true, resultText, name };
 }
 
 // ============================================================

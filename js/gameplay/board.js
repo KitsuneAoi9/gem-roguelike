@@ -6,16 +6,25 @@
 // Keeping this split means swapping render.js for a Phaser version
 // later won't require touching any logic in here.
 //
-// SIZE CHANGE THIS ROUND: SIZE is now MAX_BOARD_SIZE (20), not the
-// old fixed BOARD_SIZE (8). The grid is allocated at its maximum
-// possible footprint from the start of every run — a fresh run just
-// has almost everything BLOCKED except a centered starting square
-// (see tiles.js's resetTiles()). Expand-board boons unblock more of
-// this pre-allocated space; nothing in this file changes size at
-// runtime, which keeps findMatches/collapseAndFill/hasPossibleMove
-// exactly as simple as before — they already treat BLOCKED cells as
-// "skip this," so a mostly-BLOCKED 20x20 grid behaves for them
-// exactly like a smaller board would.
+// NEW THIS ROUND — OBSIDIAN, a permanent "dead gem" sentinel value,
+// same family as BLOCKED (null) and the transient clear-marker (-1).
+// It sits in the same main `grid` as everything else (it's a real,
+// present cell — not a metadata overlay like a special gem), but:
+//   - It can never be part of a match. This is FREE — isGem() already
+//     requires `value >= 0`, and OBSIDIAN is negative, so every
+//     existing findMatches()/hasPossibleMove()/findHintMove() call
+//     already treats it as "not a matchable color" with zero changes
+//     to that logic.
+//   - It CAN fall via gravity like a normal gem (collapseAndFill()
+//     already needs no change either — it only special-cases BLOCKED
+//     as a floor and -1 as "already cleared"; OBSIDIAN is neither, so
+//     it rides along with gravity exactly like a real gem would).
+//   - It can never be the origin OR target of a swap — that DOES need
+//     an explicit check, added to hasPossibleMove()/findHintMove()
+//     below, right next to the existing BLOCKED skip.
+//   - Removing it from the board entirely ("falls off the last row")
+//     is handled in gameplay/obsidian.js, not here — that's board-
+//     state-driven cleanup, not a matching/legality rule.
 // ============================================================
 
 import { MAX_BOARD_SIZE, GEM_TYPES_COUNT } from '../resources/constant/constants.js';
@@ -29,6 +38,14 @@ export const GEM_TYPES_TOTAL = GEM_TYPES_COUNT;
 // findMatches/collapseAndFill/hasPossibleMove all treat this as a
 // cell that can never hold or pass a gem.
 export const BLOCKED = null;
+
+// NEW — sentinel for an Obsidian gem: a permanent, present, but
+// completely inert cell. Deliberately a DIFFERENT negative number
+// than the -1 transient-clear marker, so the two are never confused
+// mid-cascade (a cell briefly set to -1 during collapseAndFill() is
+// "about to be refilled"; OBSIDIAN is "stays exactly this way until
+// it falls off the board on its own").
+export const OBSIDIAN = -2;
 
 function isGem(value) {
   return typeof value === 'number' && value >= 0;
@@ -106,19 +123,25 @@ function inBounds(row, col) {
  * cell that's part of some match (a cell can be in both a row-match
  * and a column-match at once).
  *
+ * NOTE — OBSIDIAN cells are automatically excluded here for free: this
+ * function only extends/anchors a run through isGem(g[r][c]), and
+ * isGem() requires a non-negative number. OBSIDIAN (-2) fails that
+ * check the same way BLOCKED (null) and the transient -1 marker
+ * already did, so no OBSIDIAN-specific code is needed in this
+ * function at all.
+ *
  * @param {number[][]} g - the grid to scan.
- * @param {(row: number, col: number) => boolean} [isExcluded] - NEW —
- *   returns true for a cell that must NEVER be treated as part of a
- *   run, even if its neighbors share its gemType, and can never
- *   ANCHOR a run either (a run starting at an excluded cell is
- *   immediately broken, length 1, regardless of what follows it).
- *   This is how a cell currently holding a special gem gets carved
- *   out of ordinary color-matching — passed in by the caller
- *   (main.js) rather than read here, since board.js must stay
- *   unaware that special gems exist at all (Rule 2/Rule 9). Defaults
- *   to "nothing is excluded", reproducing the old always-matchable
- *   behavior for any caller that doesn't care (e.g. a plain color
- *   grid with no special-gem overlay to speak of).
+ * @param {(row: number, col: number) => boolean} [isExcluded] - returns
+ *   true for a cell that must NEVER be treated as part of a run, even
+ *   if its neighbors share its gemType, and can never ANCHOR a run
+ *   either (a run starting at an excluded cell is immediately broken,
+ *   length 1, regardless of what follows it). This is how a cell
+ *   currently holding a special gem (Hyperstar) gets carved out of
+ *   ordinary color-matching — passed in by the caller (main.js)
+ *   rather than read here, since board.js must stay unaware that
+ *   special gems exist at all (Rule 2/Rule 9). Defaults to "nothing
+ *   is excluded", reproducing the old always-matchable behavior for
+ *   any caller that doesn't care.
  * @returns {boolean[][]} a SIZE x SIZE grid, true where that cell is matched.
  */
 export function findMatches(g, isExcluded = () => false) {
@@ -129,11 +152,11 @@ export function findMatches(g, isExcluded = () => false) {
     for (let c = 1; c <= SIZE; c++) {
       // A run only extends into c when: c is in bounds, NEITHER c nor
       // the run's own anchor (runStart) is excluded, the color
-      // matches, and it's an actual gem (not BLOCKED/-1). Checking
-      // runStart on every iteration (not just once) means an excluded
-      // cell can never anchor a run at all — it forces an immediate
-      // break the very next iteration, so it's never swept into
-      // anything, in either direction.
+      // matches, and it's an actual gem (not BLOCKED/-1/OBSIDIAN).
+      // Checking runStart on every iteration (not just once) means an
+      // excluded cell can never anchor a run at all — it forces an
+      // immediate break the very next iteration, so it's never swept
+      // into anything, in either direction.
       const extendsRun = c < SIZE
         && !isExcluded(r, c)
         && !isExcluded(r, runStart)
@@ -195,27 +218,25 @@ export function hasAnyMatch(matched) {
  *   approximation as the existing "hasPossibleMove() doesn't account
  *   for Hypercube activation" TODO from Part 1.
  * @param {(r1: number, c1: number, r2: number, c2: number) => boolean} [isSpecialSwap] -
- *   NEW — returns true if swapping these two specific cells is a
- *   legal move ON ITS OWN, independent of whether it would also form
- *   a color match. This exists because board.js has no idea what a
- *   "special gem" is (Rule 2/9) — main.js builds the actual check
- *   (any swap touching a Hyperstar, or any pair of two specials) and
- *   hands it in, mirroring attemptSwap()'s own dispatch order. Without
- *   this, a board whose only legal move is e.g. two adjacent
- *   Dischargers would incorrectly report itself as stuck, since
- *   findMatches() alone can never see that swap as "legal" — it
- *   doesn't form a color match at all, it triggers a combo instead.
+ *   returns true if swapping these two specific cells is a legal move
+ *   ON ITS OWN, independent of whether it would also form a color
+ *   match (Hyperstar/Laser/Discharger combos — see main.js's
+ *   isSpecialSwapPair()).
  * @returns {boolean} true if at least one legal swap would create a match.
  */
 export function hasPossibleMove(g, isExcluded = () => false, isSpecialSwap = () => false) {
   for (let r = 0; r < SIZE; r++) {
     for (let c = 0; c < SIZE; c++) {
-      if (g[r][c] === BLOCKED) continue;
+      // NEW — an Obsidian cell (like a BLOCKED cell) can never be the
+      // ORIGIN of a swap — skip it entirely, same as BLOCKED.
+      if (g[r][c] === BLOCKED || g[r][c] === OBSIDIAN) continue;
       for (const [dr, dc] of [[0, 1], [1, 0]]) {
         const nr = r + dr, nc = c + dc;
-        if (!inBounds(nr, nc) || g[nr][nc] === BLOCKED) continue;
+        // NEW — same rule for the TARGET cell of the swap: an
+        // Obsidian neighbor can never be swapped INTO either.
+        if (!inBounds(nr, nc) || g[nr][nc] === BLOCKED || g[nr][nc] === OBSIDIAN) continue;
 
-        // NEW — check the special-swap predicate FIRST, before ever
+        // Check the special-swap predicate FIRST, before ever
         // touching findMatches(). A special+special (or Hyperstar+
         // anything) swap is legal purely because of WHAT it is, not
         // because of any resulting pattern — so this check has to be
@@ -243,24 +264,22 @@ export function hasPossibleMove(g, isExcluded = () => false, isSpecialSwap = () 
  *   simplification (evaluated against current, not hypothetical,
  *   special-gem positions).
  * @param {(r1: number, c1: number, r2: number, c2: number) => boolean} [isSpecialSwap] -
- *   NEW — same predicate hasPossibleMove() takes, same reasoning: a
- *   special-gem combo swap is a legal move in its own right and gets
- *   added to the candidate list directly, without needing to pass the
- *   color-match clone-test at all.
+ *   same predicate hasPossibleMove() takes, same reasoning.
  * @returns {{ from: [number, number], to: [number, number] } | null}
  */
 export function findHintMove(g, isExcluded = () => false, isSpecialSwap = () => false) {
   const legalMoves = [];
   for (let r = 0; r < SIZE; r++) {
     for (let c = 0; c < SIZE; c++) {
-      if (g[r][c] === BLOCKED) continue;
+      // NEW — same Obsidian-can't-swap rule as hasPossibleMove() above.
+      if (g[r][c] === BLOCKED || g[r][c] === OBSIDIAN) continue;
       for (const [dr, dc] of [[0, 1], [1, 0]]) {
         const nr = r + dr, nc = c + dc;
-        if (!inBounds(nr, nc) || g[nr][nc] === BLOCKED) continue;
+        if (!inBounds(nr, nc) || g[nr][nc] === BLOCKED || g[nr][nc] === OBSIDIAN) continue;
 
-        // NEW — a special-swap combo is legal on its own; record it
-        // as a candidate and skip straight to the next direction,
-        // same as the match-found branch below does.
+        // A special-swap combo is legal on its own; record it as a
+        // candidate and skip straight to the next direction, same as
+        // the match-found branch below does.
         if (isSpecialSwap(r, c, nr, nc)) {
           legalMoves.push({ from: [r, c], to: [nr, nc] });
           continue;
@@ -301,7 +320,9 @@ export function swap(grid, row1, col1, row2, col2) {
  *
  * BLOCKED cells act as fixed obstacles: each column collapses in
  * independent segments split at every BLOCKED cell, so gems never
- * fall past one.
+ * fall past one. OBSIDIAN cells are NOT an obstacle here — they fall
+ * exactly like any other gem, since they're a real, present cell
+ * value (not BLOCKED, not -1) as far as this function is concerned.
  *
  * `parallelGrids` — optional same-size arrays (e.g. the special-gem
  * overlay) that should move in lockstep with the grid: a surviving

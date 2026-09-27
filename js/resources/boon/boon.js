@@ -1,26 +1,28 @@
 // ============================================================
 // BOON.JS (resources) — the full pool of boons that can be offered.
 //
-// REWORKED THIS ROUND per the new design sheet's two-section layout:
-//   A. "Series" boons — one archetype x every gem in the 11-gem
-//      catalog (now 11 archetypes, up from 10 — Polish is new).
-//   B. "Non-series" boons — global, not gem-scoped at all (Jeweler/
-//      Gemologist), same spirit as the 4 existing global-score boons
-//      but touching every gem's base value instead of the running
-//      score total.
+// NEW THIS ROUND — SHOP_ONLY_BOON_IDS + shopOnlyBoons (Booner, VIP
+// Membership Card). Same treatment EVENT_ONLY_BOON_IDS already gets:
+// these still live in the exported BOON_POOL array (so pickBoon()/
+// isBoonAvailable() work normally on them), but gameplay/boon.js's
+// offer generators exclude them entirely. They're ONLY ever granted
+// through the new "Limited Edition Boons Sale" Customer Service slot
+// in the shop (gameplay/customer_service.js).
 //
-// Built from GEM_ARCHETYPES x ALL_GEM_CATALOG (11 x 11 = 121 entries)
-// plus 4 global-score boons plus 2 non-series boons, instead of
-// hand-written literals, so the design sheet's numbers live in one
-// place per archetype. `effect` is a structured payload —
-// js/gameplay/boon_effects.js dispatches on `effect.kind`.
+// Both are presence-only markers ('flag_no_op') — nothing for
+// boon_effects.js's applyBoonEffect() to apply/reverse:
+//   - Booner: checked via isBoonActive('booner') in main.js's
+//     maybeGrantBoonerBonusOffer() (counts copies for its stacking
+//     +25%/copy chance).
+//   - VIP Membership Card: checked via isBoonActive('vip_membership_card')
+//     at every shop price calculation in main.js (applyVipDiscount()).
 // ============================================================
 
 import { ALL_GEM_CATALOG } from '../constant/constants.js';
 
 export const BOON_TYPE = {
   BUFF: 'buff',
-  RISKY_BUFF: 'risky_buff', // renamed from BUFF_WITH_DRAWBACK
+  RISKY_BUFF: 'risky_buff',
   TILE_BASIC: 'tile_basic',
   TILE_EXPANDED: 'tile_expanded',
   CURSE: 'curse',
@@ -45,23 +47,19 @@ export const BOON_RARITY_WEIGHTS = {
   [BOON_RARITY.LEGENDARY]: 0.02,
 };
 
-/**
- * One entry per per-gem archetype ("Series" boons — section A of the
- * design sheet). `description` is filled in per gem below — takes
- * (capitalizedGemName, lowercaseGemName) since the sheet's wording
- * mixes both cases mid-sentence.
- *
- * REWORKED THIS ROUND — numbers, rarities, and max-occurrence caps
- * all changed per the new sheet; Polish is a brand new archetype
- * (11th, so 11 gems x 11 archetypes now). Three archetypes (Frenzy,
- * Brilliance, Addict) changed from "penalize EVERY other gem" to
- * "penalize exactly TWO random other gems" — that randomness can't
- * be resolved here (this file is data-only, Rule 6), so these three
- * just carry a `penalizedCount` field alongside the flat
- * `othersPenalty`/`penalty` amount. The ACTUAL random gem selection
- * happens once, at pick time, in js/gameplay/boon_effects.js's
- * applyBoonEffect() — see its pickRandomOtherGems() helper.
- */
+// NEW — ids of every boon that must NEVER appear through the normal
+// weighted-roll (generateBoonOffer()) or equal-weight shop
+// (generateEqualWeightBoonOffer()) pools — they're only ever granted
+// directly by a specific event/challenge. Kept as a Set (not baked
+// into each entry as a flag) so gameplay/boon.js's offer generators
+// and gameplay/event.js's reward-pool lookup share exactly one source
+// of truth for "which ids are event-only."
+export const EVENT_ONLY_BOON_IDS = new Set(['overcharge_essence']);
+
+// NEW — shop-exclusive boons, only ever obtainable via the "Limited
+// Edition Boons Sale" Customer Service slot.
+export const SHOP_ONLY_BOON_IDS = new Set(['booner', 'vip_membership_card']);
+
 const GEM_ARCHETYPES = [
   {
     idSuffix: 'affinity',
@@ -79,20 +77,15 @@ const GEM_ARCHETYPES = [
     type: BOON_TYPE.RISKY_BUFF,
     rarity: BOON_RARITY.UNCOMMON,
     maxOccurrences: 1,
-    // penalizedCount: how many OTHER gems get the per-match penalty —
-    // picked randomly, once, when this boon is applied (NOT every
-    // other gem, unlike the old version of Frenzy).
     effect: { kind: 'frenzy', bonus: 200, penalty: -50, penalizedCount: 2 },
   },
   {
     idSuffix: 'polish',
     nameSuffix: 'Polish',
-    // NEW archetype — the only one that touches BOTH base score and
-    // base multiplier in a single pick, with no drawback at all.
     description: (Gem) => `Increase ${Gem}'s base score value by +5 and multiplier value by +0.1.`,
     type: BOON_TYPE.BUFF,
     rarity: BOON_RARITY.COMMON,
-    maxOccurrences: null, // Unlimited — no cap at all, per the sheet
+    maxOccurrences: null,
     effect: { kind: 'gem_polish', scoreAmount: 5, multiplierAmount: 0.1 },
   },
   {
@@ -111,9 +104,6 @@ const GEM_ARCHETYPES = [
     type: BOON_TYPE.RISKY_BUFF,
     rarity: BOON_RARITY.RARE,
     maxOccurrences: 3,
-    // NEW kind — distinct from Opulence's 'gem_score_opulence' below, since
-    // Brilliance only ever touches TWO random other gems, not every
-    // other gem in the catalog.
     effect: { kind: 'gem_score_brilliance', amount: 50, othersPenalty: -10, penalizedCount: 2 },
   },
   {
@@ -123,9 +113,6 @@ const GEM_ARCHETYPES = [
     type: BOON_TYPE.RISKY_BUFF,
     rarity: BOON_RARITY.EPIC,
     maxOccurrences: 2,
-    // Unchanged kind — Opulence is still the "penalize EVERY other gem"
-    // archetype, explicitly called out as "non-[gem] gems" (not
-    // "two random gems") on the new sheet.
     effect: { kind: 'gem_score_opulence', amount: 250, othersPenalty: -10 },
   },
   {
@@ -153,9 +140,6 @@ const GEM_ARCHETYPES = [
     type: BOON_TYPE.RISKY_BUFF,
     rarity: BOON_RARITY.RARE,
     maxOccurrences: 2,
-    // Same kind name as before, but the SEMANTICS changed — see
-    // boon_effects.js's 'gem_multiplier_addict' case: it now picks
-    // two random other gems instead of hitting every other gem.
     effect: { kind: 'gem_multiplier_addict', amount: 2.0, othersPenalty: -0.5, penalizedCount: 2 },
   },
   {
@@ -178,7 +162,6 @@ const GEM_ARCHETYPES = [
   },
 ];
 
-// 11 gems x 11 archetypes = 121 entries.
 const perGemBoons = ALL_GEM_CATALOG.flatMap(({ id: gemId, name: gemName }) => {
   const lower = gemName.toLowerCase();
   return GEM_ARCHETYPES.map(archetype => ({
@@ -188,42 +171,187 @@ const perGemBoons = ALL_GEM_CATALOG.flatMap(({ id: gemId, name: gemName }) => {
     type: archetype.type,
     rarity: archetype.rarity,
     maxOccurrences: archetype.maxOccurrences,
-    // effect.gem is also what gates this boon in gemUnlockState —
-    // no separate "locked" flag needed on the boon itself.
     effect: { ...archetype.effect, gem: gemId },
   }));
 });
 
-// The 4 global-score boons — not gem-scoped, always in the pool.
-// UNCHANGED this round — the redesign only touched the per-gem
-// archetypes (section A) and added the two non-series boons (section
-// B) below; these 4 still work exactly as before.
+const forbiddenBoons = ALL_GEM_CATALOG.map(({ id: gemId, name: gemName }) => ({
+  id: `forbidden_${gemId}`,
+  name: `Forbidden ${gemName}`,
+  description: `Increase ${gemName} base score value by +250 and multiplier value by +2.5, but decrease a random gem's base score value by -250, and multiplier value by -2.5.`,
+  type: BOON_TYPE.RISKY_BUFF,
+  rarity: BOON_RARITY.EPIC,
+  maxOccurrences: 1,
+  effect: {
+    kind: 'gem_forbidden_swap',
+    gem: gemId,
+    scoreAmount: 250,
+    multiplierAmount: 2.5,
+    otherScorePenalty: -250,
+    otherMultiplierPenalty: -2.5,
+    penalizedCount: 1,
+  },
+}));
+
+const matchmakerBoons = [
+  {
+    id: 'threesome_matchmaker',
+    name: 'Threesome Matchmaker',
+    description: 'Increase match-3 multiplier by +0.5.',
+    type: BOON_TYPE.BUFF,
+    rarity: BOON_RARITY.UNCOMMON,
+    maxOccurrences: 3,
+    effect: { kind: 'match_size_multiplier_bonus', size: 3, amount: 0.5 },
+  },
+  {
+    id: 'foursome_matchmaker',
+    name: 'Foursome Matchmaker',
+    description: 'Increase match-4 multiplier by +1.',
+    type: BOON_TYPE.BUFF,
+    rarity: BOON_RARITY.UNCOMMON,
+    maxOccurrences: 3,
+    effect: { kind: 'match_size_multiplier_bonus', size: 4, amount: 1 },
+  },
+  {
+    id: 'fivesome_matchmaker',
+    name: 'Fivesome Matchmaker',
+    description: 'Increase match-5 multiplier by +1.5.',
+    type: BOON_TYPE.BUFF,
+    rarity: BOON_RARITY.UNCOMMON,
+    maxOccurrences: 3,
+    effect: { kind: 'match_size_multiplier_bonus', size: 5, amount: 1.5 },
+  },
+];
+
+const shardBoons = [
+  {
+    id: 'entropy_shard',
+    name: 'Entropy Shard',
+    description: 'Matching three now has a 10% chance of creating a Hyperspace Star gem, but also a 10% chance of creating an Obsidian gem.',
+    type: BOON_TYPE.RISKY_BUFF,
+    rarity: BOON_RARITY.RARE,
+    maxOccurrences: 2,
+    effect: { kind: 'match3_shard_chance', shardType: 'entropy' },
+  },
+  {
+    id: 'luminous_shard',
+    name: 'Luminous Shard',
+    description: 'Matching three now has a 10% chance of creating a Laser Beam gem, but also a 10% chance of creating an Obsidian gem.',
+    type: BOON_TYPE.RISKY_BUFF,
+    rarity: BOON_RARITY.RARE,
+    maxOccurrences: 2,
+    effect: { kind: 'match3_shard_chance', shardType: 'luminous' },
+  },
+  {
+    id: 'explosive_shard',
+    name: 'Explosive Shard',
+    description: 'Matching three now has a 10% chance of creating a Discharger gem, but also a 10% chance of creating an Obsidian gem.',
+    type: BOON_TYPE.RISKY_BUFF,
+    rarity: BOON_RARITY.RARE,
+    maxOccurrences: 2,
+    effect: { kind: 'match3_shard_chance', shardType: 'explosive' },
+  },
+];
+
+const franticStarBoon = {
+  id: 'frantic_star',
+  name: 'Frantic Star',
+  description: 'Hyperstar now also targets a second random gem type whenever it activates, but there is a 5% chance of a Hyperstar on the board activating entirely on its own after any cascade settles (still targeting two random gem types).',
+  type: BOON_TYPE.RISKY_BUFF,
+  rarity: BOON_RARITY.EPIC,
+  maxOccurrences: 2,
+  effect: { kind: 'flag_no_op' },
+};
+
+const commitmentBoons = [
+  {
+    id: 'warmonger',
+    name: 'Warmonger',
+    description: 'Increase the global score bonus by +250, but you can no longer refuse an Elite fight.',
+    type: BOON_TYPE.RISKY_BUFF,
+    rarity: BOON_RARITY.UNCOMMON,
+    maxOccurrences: 1,
+    effect: { kind: 'global_score_boost', flatBonusDelta: 250 },
+  },
+  {
+    id: 'adventure_junkie',
+    name: 'Adventure Junkie',
+    description: 'Increase the global score multiplier by +2.5, but you can no longer refuse a Challenge event.',
+    type: BOON_TYPE.RISKY_BUFF,
+    rarity: BOON_RARITY.UNCOMMON,
+    maxOccurrences: 1,
+    effect: { kind: 'global_score_boost', flatMultiplierDelta: 2.5 },
+  },
+];
+
+const perpetualBoon = {
+  id: 'perpetual_boon',
+  name: 'Perpetual Boon',
+  description: 'Gain +1% of your current score at the end of every level, before any shop visit. Only ever appears in an offer once every other available boon has already been offered.',
+  type: BOON_TYPE.BUFF,
+  rarity: BOON_RARITY.RARE,
+  maxOccurrences: null,
+  effect: { kind: 'perpetual_score_percent', percent: 0.01 },
+};
+
+const overchargeEssenceBoon = {
+  id: 'overcharge_essence',
+  name: 'Overcharge Essence',
+  description: 'At the start of the level, turn two random non-special gems into a Laser Beam or Discharger.',
+  type: BOON_TYPE.BUFF,
+  rarity: BOON_RARITY.LEGENDARY,
+  maxOccurrences: 2,
+  effect: { kind: 'overcharge_essence' },
+};
+
+// NEW — Booner / VIP Membership Card (shop-only, see file header).
+const shopOnlyBoons = [
+  {
+    id: 'booner',
+    name: 'Booner',
+    description: 'Increases the chance of getting another boon offer in the level reward by 25%.',
+    type: BOON_TYPE.BUFF,
+    rarity: BOON_RARITY.RARE,
+    maxOccurrences: 3,
+    effect: { kind: 'flag_no_op' },
+  },
+  {
+    id: 'vip_membership_card',
+    name: 'VIP Membership Card',
+    description: 'Reduce every shop price by 10%.',
+    type: BOON_TYPE.BUFF,
+    rarity: BOON_RARITY.LEGENDARY,
+    maxOccurrences: 1,
+    effect: { kind: 'flag_no_op' },
+  },
+];
+
 const globalBoons = [
   {
     id: 'gemstone_gamble',
     name: 'Gemstone Gamble',
-    description: 'Matching gems grants +50 global score bonus, but increases the target score by +5%.',
-    type: BOON_TYPE.RISKY_BUFF,
+    description: 'Matching gems grants +50 global bonus score.',
+    type: BOON_TYPE.BUFF,
     rarity: BOON_RARITY.RARE,
-    maxOccurrences: 10,
-    effect: { kind: 'global_score_boost', flatBonusDelta: 50, targetPercentIncrease: 0.05 },
+    maxOccurrences: 5,
+    effect: { kind: 'global_score_boost', flatBonusDelta: 50 },
   },
   {
     id: 'trinket_wager',
     name: 'Trinket Wager',
-    description: 'Matching gems grants +150 global score bonus, but increases the target score by +15%.',
+    description: 'Matching gems grants +300 global bonus score, but increases the target score by +15%.',
     type: BOON_TYPE.RISKY_BUFF,
-    rarity: BOON_RARITY.RARE,
-    maxOccurrences: 10,
-    effect: { kind: 'global_score_boost', flatBonusDelta: 150, targetPercentIncrease: 0.15 },
+    rarity: BOON_RARITY.EPIC,
+    maxOccurrences: 5,
+    effect: { kind: 'global_score_boost', flatBonusDelta: 300, targetPercentIncrease: 0.15 },
   },
   {
     id: 'gem_greed',
     name: 'Gem Greed',
     description: 'Increase the global score multiplier by +1, but increase the target score by +50%.',
     type: BOON_TYPE.RISKY_BUFF,
-    rarity: BOON_RARITY.RARE,
-    maxOccurrences: 10,
+    rarity: BOON_RARITY.EPIC,
+    maxOccurrences: 2,
     effect: { kind: 'global_score_boost', flatMultiplierDelta: 1, targetPercentIncrease: 0.50 },
   },
   {
@@ -231,21 +359,12 @@ const globalBoons = [
     name: 'Jewel Avarice',
     description: 'Increase the global score multiplier by +4, but increase the target score by +150%.',
     type: BOON_TYPE.RISKY_BUFF,
-    rarity: BOON_RARITY.RARE,
-    maxOccurrences: 10,
+    rarity: BOON_RARITY.LEGENDARY,
+    maxOccurrences: 2,
     effect: { kind: 'global_score_boost', flatMultiplierDelta: 4, targetPercentIncrease: 1.50 },
   },
 ];
 
-// NEW — "Non-series" boons (section B of the design sheet): global,
-// but unlike the 4 above, these touch every gem's BASE VALUE (score
-// or multiplier) rather than the running score total/target. No
-// `effect.gem` field at all, so — same as globalBoons — they're
-// never gated by gemUnlockState (see boon.js gameplay's
-// isBoonAvailable()); their own dispatcher case in boon_effects.js
-// applies the delta to every id in ALL_GEM_IDS directly, locked gems
-// included, same precedent Opulence already set for "hits every gem"
-// effects.
 const nonSeriesBoons = [
   {
     id: 'jeweler',
@@ -311,4 +430,16 @@ const constructionDeconstructionBoons = [
 ];
 
 //export const BOON_POOL = [...perGemBoons, ...globalBoons, ...constructionDeconstructionBoons, ...nonSeriesBoons];
-export const BOON_POOL = [...perGemBoons, ...globalBoons, ...nonSeriesBoons];
+export const BOON_POOL = [
+  ...perGemBoons,
+  ...globalBoons,
+  ...nonSeriesBoons,
+  ...forbiddenBoons,
+  ...matchmakerBoons,
+  ...shardBoons,
+  franticStarBoon,
+  ...commitmentBoons,
+  perpetualBoon,
+  overchargeEssenceBoon,
+  ...shopOnlyBoons, // NEW
+];

@@ -4,43 +4,26 @@
 // This is the piece that gets replaced when we move to Phaser later.
 // main.js and board.js should never need to change when this does.
 //
-// REWRITE THIS ROUND: the board used to always be a fixed 8x8, so
-// every pixel-index calculation (computeCellPitch, animateSwap,
-// markMatchedGems) could hardcode SIZE. Now the grid is allocated at
-// up to 20x20 but only ever DISPLAYS the smallest rectangle containing
-// the usable cells (board.js's getActiveBounds()) — plus, during an
-// expand-board placement, a ring of "ghost" cells the player can click
-// to grow the board. So every function below that used to assume "the
-// grid is SIZE x SIZE" now reads the ACTUAL rendered rectangle's
-// origin and width off boardEl.dataset, which renderBoard() stashes
-// there every time it redraws.
-//
-// NEW THIS ROUND — drag-to-swap: a gem cell now supports BOTH
-// tap-to-select (the original click-then-click-adjacent flow) AND
-// press-and-drag toward a neighbor. Both live together in
-// wireCellInteraction() below, built on the Pointer Events API so
-// mouse/touch/pen all get the same behavior without separate code
-// paths. Blocked/ghost cells (no gem to drag) keep the old plain
-// click listener.
+// NEW THIS ROUND — Obsidian gem rendering: a cell holding board.js's
+// OBSIDIAN sentinel is rendered as a plain, inert black square
+// (placeholder styling in gems.css — real SVG art TBD, same "art not
+// started yet" category as every other special-gem asset in this
+// project) instead of going through the normal GEM_DEFINITIONS
+// lookup (which only covers real gem-type indices and would crash on
+// a negative one). It gets a plain click passthrough only — no drag
+// wiring at all — since main.js's own OBSIDIAN guard in onCellClick()
+// is what actually explains "nothing happens" to the player, same
+// convention a BLOCKED cell already uses.
 // ============================================================
 
-import { SIZE, BLOCKED, getActiveBounds } from './board.js';
+import { SIZE, BLOCKED, OBSIDIAN, getActiveBounds } from './board.js';
 import { GEM_DEFINITIONS, DRAG_SWAP_THRESHOLD_PX } from '../resources/constant/constants.js';
 import { tileState  } from '../resources/tile/tile_state.js';
 import { specialGemState } from '../resources/special%20gem/special_gem_state.js';
 
 /**
  * Converts an absolute (row, col) into the DOM child index of that
- * cell in the currently-rendered board — i.e. "how many .cell
- * elements come before this one in boardEl.children." Every function
- * below that needs to find a specific cell's DOM node (rather than
- * just looping over all of them) goes through this, so the
- * row/col -> index math lives in exactly one place.
- *
- * Reads minRow/minCol/numCols off boardEl.dataset rather than taking
- * them as parameters, so call sites (main.js) don't have to carry
- * that bookkeeping around themselves — renderBoard() is the only
- * place that needs to know it wrote them there.
+ * cell in the currently-rendered board.
  *
  * @param {HTMLElement} boardEl
  * @param {number} row - absolute board row.
@@ -57,27 +40,13 @@ function cellIndex(boardEl, row, col) {
 /**
  * Wires up ONE gem cell's pointer interactions: plain tap/click
  * (calls onCellClick) AND press-and-drag toward a neighbor (calls
- * onCellSwap once the drag clears DRAG_SWAP_THRESHOLD_PX). Both are
- * decided from the same Pointer Events listeners rather than the
- * click event separately, on purpose — see the note below.
+ * onCellSwap once the drag clears DRAG_SWAP_THRESHOLD_PX).
  *
- * Deliberately does NOT use the browser's native 'click' event to
- * detect "was this a tap." After a drag gesture, exactly where (and
- * whether) a synthetic click fires is inconsistent enough across
- * browsers/devices that it's simpler and more predictable to track
- * press-vs-drag ourselves and decide on pointerup.
- *
- * Only ever called for a non-BLOCKED cell (see renderBoard() below) —
- * there's nothing meaningful to drag on a blocked/ghost cell.
- *
- * @param {HTMLElement} cell - the cell's DOM element, already built.
- * @param {number} row - absolute board row this cell represents.
- * @param {number} col - absolute board col this cell represents.
+ * @param {HTMLElement} cell
+ * @param {number} row
+ * @param {number} col
  * @param {(r: number, c: number) => void} onCellClick
- * @param {((r1: number, c1: number, r2: number, c2: number) => void) | undefined} onCellSwap -
- *   if omitted, drag is simply never wired (tap-to-click still works)
- *   — keeps this function safe to call even from a render path that
- *   doesn't have a swap handler to give it.
+ * @param {((r1: number, c1: number, r2: number, c2: number) => void) | undefined} onCellSwap
  * @returns {void}
  */
 function wireCellInteraction(cell, row, col, onCellClick, onCellSwap) {
@@ -85,8 +54,8 @@ function wireCellInteraction(cell, row, col, onCellClick, onCellSwap) {
   // its own independent little state machine, reset every gesture.
   let startX = 0;
   let startY = 0;
-  let dragFired = false;   // true once THIS gesture has already fired a swap
-  let pointerId = null;    // the pointer currently pressed on this cell, if any
+  let dragFired = false;
+  let pointerId = null;
 
   cell.addEventListener('pointerdown', (e) => {
     if (e.button !== undefined && e.button !== 0) return; // ignore right/middle-click drags
@@ -122,7 +91,7 @@ function wireCellInteraction(cell, row, col, onCellClick, onCellSwap) {
       targetRow = row + (dy > 0 ? 1 : -1);
     }
 
-    dragFired = true; // only ever fire once per press, even if the pointer keeps moving further
+    dragFired = true;
     onCellSwap(row, col, targetRow, targetCol);
   });
 
@@ -146,28 +115,12 @@ function wireCellInteraction(cell, row, col, onCellClick, onCellSwap) {
 /**
  * Rebuilds the #board element from scratch based on the current grid.
  *
- * Only draws the smallest rectangle containing every usable cell
- * (board.js's getActiveBounds()) — most of the allocated grid starts,
- * and often stays, BLOCKED padding the player never needs to see.
- * Pass `ghostCells` (only while an expand-board placement is active)
- * to additionally draw a ring of clickable-but-still-blocked cells
- * just past the current edge, and to widen the drawn rectangle enough
- * to fit them.
- *
- * @param {HTMLElement} boardEl - the #board container element.
- * @param {number[][]} grid - the current grid of gem type numbers.
- * @param {(r: number, c: number) => void} onCellClick - called with a
- *   cell's row/col whenever that cell is tapped/clicked (not dragged).
+ * @param {HTMLElement} boardEl
+ * @param {number[][]} grid
+ * @param {(r: number, c: number) => void} onCellClick
  * @param {object} [options]
- * @param {[number, number][]} [options.ghostCells] - BLOCKED cells to
- *   render as clickable "extend here" targets instead of the normal
- *   greyed-out look, and to include in the drawn rectangle even
- *   though they're outside the usable area.
- * @param {(r1: number, c1: number, r2: number, c2: number) => void} [options.onCellSwap] -
- *   called when a press-and-drag gesture on a gem cell resolves into
- *   a swap attempt toward a neighboring cell (see wireCellInteraction()
- *   above). Omit to render gem cells with tap-only interaction — no
- *   drag wired at all.
+ * @param {[number, number][]} [options.ghostCells]
+ * @param {(r1: number, c1: number, r2: number, c2: number) => void} [options.onCellSwap]
  * @returns {void}
  */
 export function renderBoard(boardEl, grid, onCellClick, options = {}) {
@@ -234,10 +187,20 @@ export function renderBoard(boardEl, grid, onCellClick, options = {}) {
         } else {
           cell.classList.add('cell--blocked');
         }
-        // Blocked/ghost cells never have a gem to drag — plain
-        // click only. This is also what lets a ghost cell anchor a
-        // board-expand placement via onCellClick, same as before
-        // drag-to-swap existed.
+        cell.addEventListener('click', () => onCellClick(row, col));
+      } else if (gemType === OBSIDIAN) {
+        // since Obsidian has no GEM_DEFINITIONS entry of its own (it's
+        // a sentinel value, not a matchable color with a type index).
+        // Still no drag wiring at all — just a passthrough click, so
+        // onCellClick()'s own OBSIDIAN guard is what tells the player
+        // "nothing to do here," same as a BLOCKED cell.
+        cell.classList.add('cell--obsidian');
+        const gem = document.createElement('div');
+        gem.className = 'gem gem--obsidian';
+        gem.style.backgroundImage = `url('css/model/svg/obsidian.svg')`;
+        gem.setAttribute('role', 'img');
+        gem.setAttribute('aria-label', 'Obsidian');
+        cell.appendChild(gem);
         cell.addEventListener('click', () => onCellClick(row, col));
       } else {
         if (tileCellKeys.has(key)) {
@@ -276,11 +239,10 @@ export function renderBoard(boardEl, grid, onCellClick, options = {}) {
 
 /**
  * Adds/removes the .selected class on both the cell (outline) and its
- * gem (lift + spin animation, defined in css/animation/select.css).
+ * gem (lift + spin animation).
  *
- * @param {HTMLElement} boardEl - the #board container element.
- * @param {[number, number] | null} selected - [row, col] of the
- *   currently selected cell, or null if nothing is selected.
+ * @param {HTMLElement} boardEl
+ * @param {[number, number] | null} selected
  * @returns {void}
  */
 export function updateSelectedVisual(boardEl, selected) {
@@ -294,23 +256,17 @@ export function updateSelectedVisual(boardEl, selected) {
 
 /**
  * Measures pixel distance between adjacent cells so animateSwap can
- * compute slide offsets without hardcoding cell size/gap (those live
- * in css/design/layout.css and could change independently).
+ * compute slide offsets.
  *
- * Reads the rendered column count off boardEl.dataset (set by the
- * most recent renderBoard() call) instead of assuming SIZE — the
- * board's rendered width now varies as it grows/shrinks.
- *
- * @param {HTMLElement} boardEl - the #board container element, already rendered.
- * @returns {{x: number, y: number}} pixel distance to the next column (x)
- *   and next row (y).
+ * @param {HTMLElement} boardEl
+ * @returns {{x: number, y: number}}
  */
 export function computeCellPitch(boardEl) {
   const numCols = +boardEl.dataset.numCols;
   const cells = boardEl.children;
   const origin = cells[0].getBoundingClientRect();
-  const nextCol = cells[1].getBoundingClientRect();        // same row, next column
-  const nextRow = cells[numCols].getBoundingClientRect();  // next row, same column
+  const nextCol = cells[1].getBoundingClientRect();
+  const nextRow = cells[numCols].getBoundingClientRect();
   return {
     x: nextCol.left - origin.left,
     y: nextRow.top - origin.top,
@@ -319,29 +275,19 @@ export function computeCellPitch(boardEl) {
 
 /**
  * Plays the slide animation for a swap that already happened in the
- * grid data and has already been re-rendered. Call this right after
- * renderBoard() so the gems are in their new (post-swap) DOM spots.
+ * grid data and has already been re-rendered.
  *
- * Technique: each gem is instantly offset (via inline transform, no
- * transition) back to where it visually was before the swap, then the
- * .gem-swap-transition class + a reset to translate(0,0) lets CSS
- * animate it sliding into its real spot.
- *
- * Cell lookups now go through cellIndex() instead of the old
- * row*SIZE+col math, since the rendered board's width isn't SIZE
- * anymore.
- *
- * @param {HTMLElement} boardEl - the #board container element, already re-rendered post-swap.
- * @param {number} row1 - row of the first swapped cell.
- * @param {number} col1 - column of the first swapped cell.
- * @param {number} row2 - row of the second swapped cell.
- * @param {number} col2 - column of the second swapped cell.
- * @param {{x: number, y: number}} pitch - result of computeCellPitch(), measured before the swap.
+ * @param {HTMLElement} boardEl
+ * @param {number} row1
+ * @param {number} col1
+ * @param {number} row2
+ * @param {number} col2
+ * @param {{x: number, y: number}} pitch
  * @returns {void}
  */
 export function animateSwap(boardEl, row1, col1, row2, col2, pitch) {
-  const gemAt1 = boardEl.children[cellIndex(boardEl, row1, col1)]?.querySelector('.gem'); // arrived from (r2,c2)
-  const gemAt2 = boardEl.children[cellIndex(boardEl, row2, col2)]?.querySelector('.gem'); // arrived from (r1,c1)
+  const gemAt1 = boardEl.children[cellIndex(boardEl, row1, col1)]?.querySelector('.gem');
+  const gemAt2 = boardEl.children[cellIndex(boardEl, row2, col2)]?.querySelector('.gem');
   if (!gemAt1 || !gemAt2) return;
 
   const moves = [
@@ -352,7 +298,7 @@ export function animateSwap(boardEl, row1, col1, row2, col2, pitch) {
   for (const [gem, startX, startY] of moves) {
     gem.style.transition = 'none';
     gem.style.transform = `translate(${startX}px, ${startY}px)`;
-    void gem.offsetWidth; // force reflow so the start position registers before animating
+    void gem.offsetWidth;
     gem.style.transition = '';
     gem.classList.add('gem-swap-transition');
     gem.style.transform = 'translate(0px, 0px)';
@@ -362,15 +308,8 @@ export function animateSwap(boardEl, row1, col1, row2, col2, pitch) {
 /**
  * Plays the pop animation on every gem in a matched cell.
  *
- * `matched` is still the full SIZE x SIZE grid findMatches() always
- * returns — that never changed. What changed is how a (r, c) in that
- * grid maps to a DOM child index, since the rendered rectangle isn't
- * SIZE x SIZE anymore. Cells outside the rendered rectangle (there
- * shouldn't be any matched ones — matches only ever happen among
- * usable cells — but the guard costs nothing) are just skipped.
- *
- * @param {HTMLElement} boardEl - the #board container element.
- * @param {boolean[][]} matched - grid returned by findMatches().
+ * @param {HTMLElement} boardEl
+ * @param {boolean[][]} matched
  * @returns {void}
  */
 export function markMatchedGems(boardEl, matched) {
@@ -380,7 +319,7 @@ export function markMatchedGems(boardEl, matched) {
   for (let r = 0; r < matched.length; r++) {
     for (let c = 0; c < matched[r].length; c++) {
       if (!matched[r][c]) continue;
-      if (r < minRow || c < minCol) continue; // outside what's currently drawn
+      if (r < minRow || c < minCol) continue;
       const index = cellIndex(boardEl, r, c);
       const gem = boardEl.children[index]?.querySelector('.gem');
       if (gem) gem.classList.add('matched');
@@ -389,20 +328,10 @@ export function markMatchedGems(boardEl, matched) {
 }
 
 /**
- * NEW — highlights a legal swap for the player: adds a pulsing glow
- * class to both cells of a hinted pair (see main.js's
- * scheduleHintTimer()/showHintNow() and board.js's findHintMove()).
+ * Highlights a legal swap for the player.
  *
- * Purely additive — doesn't touch .selected or anything else already
- * on the cell — and needs no matching "clear" function: the next
- * renderBoard() call (a swap, a cascade step, a reshuffle, a tile
- * placement — anything that changes the board) wipes the whole DOM
- * and rebuilds it from scratch, which naturally clears this class
- * along with everything else. That's what makes "the hint disappears
- * once the player acts" work for free.
- *
- * @param {HTMLElement} boardEl - the #board container element, already rendered.
- * @param {[number, number][]} cells - the two [row, col] cells to highlight.
+ * @param {HTMLElement} boardEl
+ * @param {[number, number][]} cells
  * @returns {void}
  */
 export function showHintHighlight(boardEl, cells) {

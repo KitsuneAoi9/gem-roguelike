@@ -29,17 +29,17 @@
                tooltip text itself lives entirely in data-tooltip; no
                JS is involved, CSS's ::after does the rest (see
                layout.css's .side-stat-label--info rules). -->
-          <span
-            class="side-stat-label side-stat-label--info"
-            data-tooltip="Every boon that adds to the global score multiplier (Gem Greed, Jewel Avarice) stacks additively into this number. Applied once per cascade step — BEFORE the global bonus below is added.">
-            Global Multiplier
-          </span>
+        <span
+          class="side-stat-label side-stat-label--info"
+          data-tooltip="Every boon that adds to the global score multiplier stacks additively into this number. Applied once per cascade step — AFTER the global bonus below is added.">
+          Global Multiplier
+        </span>
           <span class="side-stat-value" id="global-multiplier">1.00x</span>
         </div>
         <div class="side-stat-row">
           <span
             class="side-stat-label side-stat-label--info"
-            data-tooltip="Every boon that adds a flat global score bonus (Gemstone Gamble, Trinket Wager) stacks additively into this number. Added once per cascade step — AFTER the global multiplier above is applied.">
+            data-tooltip="Every boon that adds a flat global score bonus stacks additively into this number. Added once per cascade step — BEFORE the global multiplier above is applied.">
             Global Bonus
           </span>
           <span class="side-stat-value" id="global-bonus">+0</span>
@@ -162,9 +162,18 @@
           <h2 id="shop-title">The Shop</h2>
           <p id="shop-subtitle"></p>
           <div id="shop-choices" class="shop-choices"></div>
-          <!-- NEW — consumable section, same shop visit/dialog. -->
           <h3 class="shop-section-heading">Consumables</h3>
-          <div id="consumable-shop-choices" class="shop-choices"></div>
+          <!-- CHANGED — was class="shop-choices"; now its own class,
+               since these render as belt-style icon squares, not
+               `.shop-card` cards. -->
+          <div id="consumable-shop-choices" class="consumable-shop-choices"></div>
+          <!-- NEW — Customer Service: Curse Removal Service / Limited
+               Edition Boons Sale Service. main.js's
+               renderCustomerServiceSection() fills this in; it also
+               swaps to a curse-selection list here when the Curse
+               Removal card is clicked (renderCurseRemovalPicker()). -->
+          <h3 class="shop-section-heading">Customer Service</h3>
+          <div id="customer-service-choices" class="customer-service-choices"></div>
           <button id="shop-leave">Leave</button>
         </div>
       </div>
@@ -176,6 +185,24 @@
           <h2 id="event-title"></h2>
           <p id="event-story"></p>
           <div id="event-choices" class="event-choices"></div>
+        </div>
+      </div>
+      <!-- ============================================================
+      NEW — Resurrection Cross rework: shown only when the board is
+      stuck AND the player holds both a Resurrection Cross and at
+      least one other board-changing consumable (Pickaxe/Dynamite/
+      Dice). main.js's showDeadlockChoiceDialog() fills in the message
+      text (via innerHTML, so the Resurrection Cross's name can render
+      with its dashed-underline/hover-tooltip treatment).
+      ============================================================ -->
+      <div id="deadlock-dialog" class="dialog-overlay hidden">
+        <div class="dialog-box">
+          <h2 id="deadlock-title">No Valid Moves</h2>
+          <p id="deadlock-message"></p>
+          <div class="deadlock-dialog-choices">
+            <button id="deadlock-yes">Yes</button>
+            <button id="deadlock-no">No</button>
+          </div>
         </div>
       </div>
     </div>

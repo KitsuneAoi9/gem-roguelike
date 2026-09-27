@@ -137,3 +137,14 @@
 .gem--hyperstar::after {
   box-shadow: 0 0 18px 6px rgba(255, 221, 64, 0.95);
 }
+
+/* ============================================================
+  WITH this (the base .gem rule at the top of this file already handles
+  background-repeat/position/size for every gem, including this one, now
+  that render.js sets a real backgroundImage for it — this rule just adds
+  a subtle dark glow so it still reads as "special/inert" sitting among
+  the normal colored gems):
+   ============================================================ */
+.gem--obsidian {
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.85));
+}

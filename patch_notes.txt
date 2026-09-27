@@ -174,3 +174,48 @@ Patch Note 2026/09/24 v0.2.2.0
 -> Hovering over the consumable items on the belt will display the tooltips of its effect
 
 9. Redesigned the event dialogue. (Text align and Choices text box)
+
+========================================================================================================
+Patch Note 2026/09/27 v0.2.3.0
+
+1. Reworked Dice. It now shuffles only 3x3 area instead of the whole board.
+
+2. Reworked Ressurrection Cross. The Ressurrection Cross no longer auto-consumes itself silently the instant the board is stuck.
+
+a. If there is no OTHER board-changing consumable (Pickaxe/Dynamite/Dice) in the belt, a message will be prompted and then the item will be triggered.
+b. If there is at least one board-changing consumable in the belt, a dialog will pop up asking if player wants to use an item or just use the cross.
+
+3. Added new curses and boons.
+
+4. Added a new mechanic: dead gem.
+
+5. Added a new dead gem type: Obsidian.
+
+6. Rework The Silent Vein. It will now spans 3 levels.
+
+7. Fix Side Stats panel UI. It always fills the available viewport height, so that player can view active curses.
+
+8. Changed the global score formula. Global bonus score will now be added BEFORE global multiplier will be applied afterwards.
+=> Updated the tooltips as well.
+
+9. Added new events: 2 Challenges, 
+
+10. Add Customer Service to Shop
+The shop now provides the following services which the player can only choose one:
+
+a. Curse Removal Service:
+Player can select and remove a curse.
+First time, cost 25% of current score when you enter shop.
+Second time, cost 50% of current score when you enter shop.
+Third time onwards, cost 75% of current score when you enter shop.
+
+b. Limited Edition Boons Sale Service:
+The shop will offer a shop-only boon to the player.
+
+11. Fix Discharger spawn formation. It now will be spawn only from L/T shape.
+
+12. Redesign consumable display in the shop.
+
+13. Fix where Hyperstar is not activated when hit by special gems.
+
+14. TO DO needs to fix consumable don't count towards gem

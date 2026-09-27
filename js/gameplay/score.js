@@ -7,7 +7,9 @@
 //   2. Each incidental (blast-chained) cell: one flat gemBaseValue
 //   3. Sum scaled by the cascade combo multiplier
 //   4. Affinity + Frenzy added flat
-//   5. Global multiplier applied, THEN global flat bonus added
+//   5. Global bonus added, THEN the global multiplier is applied
+//      (CHANGED THIS ROUND — see calculateCascadeStepScore()'s doc
+//      comment below for the exact before/after).
 //
 // Negative results are allowed — see handoff Gotchas.
 // ============================================================
@@ -17,13 +19,23 @@ import { GEM_DEFINITIONS } from '../resources/constant/constants.js';
 import { boonEffectState } from '../resources/boon/boon_effect_state.js';
 import { getGemBaseValue } from './gem_base.js';
 
-/** 5+ all reuse the 5-tier value — no separate tier past 5. */
+/**
+ * 5+ all reuse the 5-tier value — no separate tier past 5.
+ *
+ * CHANGED THIS ROUND — on top of the fixed base_score.js table, this
+ * now also adds whatever Threesome/Foursome/Fivesome Matchmaker bonus
+ * is currently active for that same tier (boonEffectState.matchSizeBonus),
+ * stacking up to 3 picks per size. Table value stays the game's
+ * unmodified baseline; the boon bonus is purely additive on top.
+ */
 function getMatchSizeMultiplier(length) {
   const tier = length >= 5 ? 5 : length;
-  return MATCH_BASE_MULTIPLIER[tier] ?? MATCH_BASE_MULTIPLIER[3];
+  const base = MATCH_BASE_MULTIPLIER[tier] ?? MATCH_BASE_MULTIPLIER[3];
+  const matchmakerBonus = boonEffectState.matchSizeBonus[tier] || 0; // NEW
+  return base + matchmakerBonus;
 }
 
-/** Numeric board gemType -> gem id string. NEW — exported this round so gameplay/event.js's Elite gem-tracking can reuse it. */
+/** Numeric board gemType -> gem id string. Exported so gameplay/event.js's Elite gem-tracking, and gameplay/curse.js's Decaying Birthstone tracking, can reuse it. */
 export function gemIdForType(gemType) {
   return GEM_DEFINITIONS[gemType]?.id;
 }
@@ -44,13 +56,9 @@ function affinityBonusFor(gemId) {
 
 /**
  * Total flat per-match penalty/bonus a Frenzy-type pick contributes
- * for `gemId`. CHANGED THIS ROUND — a Frenzy pick used to penalize
- * EVERY gem other than its target; now each pick only ever affects
- * its own target gem (bonus) plus exactly the two specific random
- * gems chosen for it at pick time (`pick.penalizedGems`, set once in
- * boon_effects.js's applyBoonEffect() and never re-rolled). Any gem
- * that's neither the target nor in that pick's penalizedGems list is
- * completely unaffected by that particular Frenzy pick.
+ * for `gemId`. Each pick only ever affects its own target gem
+ * (bonus) plus exactly the specific random gems chosen for it at pick
+ * time (`pick.penalizedGems`).
  *
  * @param {string} gemId
  * @returns {number}
@@ -63,7 +71,6 @@ function frenzyAdjustmentFor(gemId) {
     } else if (pick.penalizedGems && pick.penalizedGems.includes(gemId)) {
       total += pick.penalty;
     }
-    // else: this specific Frenzy pick doesn't touch gemId at all.
   }
   return total;
 }
@@ -71,16 +78,8 @@ function frenzyAdjustmentFor(gemId) {
 /**
  * Total flat per-match adjustment a gem's OWN matches currently
  * carry: its Affinity bonus (if any) plus every active Frenzy pick's
- * contribution — that pick's bonus if `gemId` IS the Frenzy's target
- * gem, or its penalty if `gemId` is any other gem.
- *
- * Exported so the side stats panel (main.js's renderSideStats()) can
- * show the EXACT same number the scoring pipeline actually applies,
- * instead of re-deriving (and risking drifting out of sync with)
- * this math a second time. This was the root cause of Frenzy not
- * showing up in the side panel before — it only ever read
- * boonEffectState.affinityBonus directly, which Frenzy never writes
- * to (Frenzy lives in boonEffectState.frenzyPicks instead).
+ * contribution. Exported so the side stats panel can show the EXACT
+ * same number the scoring pipeline actually applies.
  *
  * @param {string} gemId
  * @returns {number}
@@ -90,11 +89,12 @@ export function getMatchBonusForGem(gemId) {
 }
 
 /**
- * NEW — counts how many cells of a specific gemId were cleared in one
+ * Counts how many cells of a specific gemId were cleared in one
  * cascade step (matched groups' full length + one per incidental
- * cell). Used by the Elite gem_cap win-condition (Cultist's Ritual) —
- * "destroy" there means ANY clear, matched or blast-chained, per
- * design.
+ * cell). Used by the Elite gem_cap win-condition (Cultist's Ritual)
+ * AND the Decaying Birthstone curse's lethal-clear tracking
+ * (gameplay/curse.js) — both mean "any clear, matched or blast-
+ * chained" by "cleared."
  *
  * @param {string} gemId
  * @param {{gemType:number,length:number}[]} matchedGroups
@@ -113,22 +113,13 @@ export function countGemClears(gemId, matchedGroups, incidentalCells) {
 }
 
 /**
- * NEW — how much of one cascade step's score is attributable to one
+ * How much of one cascade step's score is attributable to one
  * specific gemId, used by the Elite gem_subscore_race win-condition
- * (Gem Cultivator). Filters matchedGroups/incidentalCells down to
- * just that gem, then runs the SAME formula calculateCascadeStepScore()
- * uses (base value x length x size multiplier, + Affinity/Frenzy,
- * scaled by the step's combo multiplier and global multiplier) — but
- * deliberately EXCLUDES globalScoreBonus, since that's a flat
- * once-per-step add-on with no single gem to attribute it to.
- *
- * This is a reasonable approximation, not a re-derivation of exactly
- * what calculateCascadeStepScore() returned for the WHOLE step (a
- * step with multiple gem types splits its combo/global multiplier
- * proportionally by construction, so summing every gem's attributed
- * score back up won't exactly equal the step's real total once the
- * flat bonus is involved) — acceptable here since this only ever
- * feeds a progress threshold, not the player's actual score.
+ * (Gem Cultivator). Deliberately EXCLUDES globalScoreBonus, since
+ * that's a flat once-per-step add-on with no single gem to attribute
+ * it to (this exclusion is why the recent bonus/multiplier reordering
+ * in calculateCascadeStepScore() below needed NO change here at all —
+ * bonus was never part of this function's math to begin with).
  *
  * @param {string} gemId
  * @param {{gemType:number,length:number}[]} matchedGroups
@@ -163,8 +154,8 @@ export function calculateGemAttributedScore(gemId, matchedGroups, incidentalCell
 }
 
 /**
- * Scores one cascade step (one resolveMatches() pass, or a Hypercube
- * activation treated as one oversized group).
+ * Scores one cascade step (one resolveMatches() pass, or a
+ * swap-activated combo treated as one oversized group).
  *
  * @param {{
  *   matchedGroups: { gemType: number, length: number }[],
@@ -186,11 +177,8 @@ export function calculateCascadeStepScore({ matchedGroups, incidentalCells, comb
   }
 
   // Blast-chained cells aren't a formed match — one flat gem value
-  // each, same as before. NEW: they now also pull their own
-  // Affinity/Frenzy contribution, same as a formed match would — an
-  // exploded gem is still THAT gem being cleared off the board, so
-  // it shouldn't lose out on boons scoped to it just because a
-  // laser/discharger did the clearing instead of a direct match.
+  // each, but they still pull their own Affinity/Frenzy contribution,
+  // same as a formed match would.
   for (const cell of incidentalCells) {
     const gemId = gemIdForType(cell.gemType);
     rawScore += getGemBaseValue(gemId);
@@ -201,8 +189,17 @@ export function calculateCascadeStepScore({ matchedGroups, incidentalCells, comb
   const comboScaled = rawScore * getComboMultiplier(comboCount);
   const afterFlatBonuses = comboScaled + affinityTotal + frenzyTotal;
 
-  // global step: multiplier first, then the flat add — see handoff
-  const finalScore = afterFlatBonuses * boonEffectState.globalScoreMultiplier + boonEffectState.globalScoreBonus;
+  // CHANGED THIS ROUND — the global step used to be "multiply, THEN
+  // add the flat bonus":
+  //   finalScore = afterFlatBonuses * globalScoreMultiplier + globalScoreBonus
+  // It's now reordered to "add the flat bonus FIRST, then multiply
+  // the whole thing":
+  //   finalScore = (afterFlatBonuses + globalScoreBonus) * globalScoreMultiplier
+  // Both steps are still the LAST two steps of the whole pipeline —
+  // only their relative order flipped. This makes the global bonus
+  // itself benefit from the global multiplier too, instead of being
+  // tacked on afterward untouched.
+  const finalScore = (afterFlatBonuses + boonEffectState.globalScoreBonus) * boonEffectState.globalScoreMultiplier;
 
   return Math.round(finalScore); // negative allowed
 }

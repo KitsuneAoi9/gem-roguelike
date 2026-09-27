@@ -35,6 +35,8 @@ Phase 2 v0.2.x.x (Currently in progress)
 -> Implement curse (75% done)
 -> Implement the first batch of consumable (Completed).
 -> Implement Stats side screen to view the current stat and active curse. (Complete)
+-> Implement a new mechanic: Dead Gem (Done)
+-> Implement a new dead gem type: Obsidian (Done)
 -> Finalize the naming and the description of boons, curse and consumable. (In progress)
 -> Implement some quality of life (In tandem with above task)
 -> Test play and fix issues/bugs or balancing. (In tandem with above task)
@@ -76,3 +78,17 @@ OO
 6. Added boon
 
 7. Added Removal service to the shop
+
+8.
+
+
+
+A Test of Endurance - lose conditions is within 10 minutes
+
+Overcharge Essence
+Obsidian Cultivation
+
+Removal + shop-only boon shop
+booner	Booner	25% chance of getting another boon offer.	BUFF	RARE	3
+
+Potion to show only icon 
