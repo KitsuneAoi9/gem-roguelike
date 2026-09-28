@@ -6,8 +6,9 @@
 // convention boon_shop.js already established.
 // ============================================================
 
-import { consumableShopState } from '../resources/shop/consumable_shop_state.js';
 import { CONSUMABLE_INFO, CONSUMABLE_TYPE, CONSUMABLE_SHOP_OFFER_COUNT } from '../resources/consumable/consumable.js';
+import { consumableShopState } from '../resources/shop/consumable_shop_state.js';
+import { consumableState } from '../resources/consumable/consumable_state.js'; // to check what the belt currently holds
 
 function shuffle(array) {
   const copy = array.slice();
@@ -27,11 +28,25 @@ function shuffle(array) {
  * @returns {void}
  */
 export function rollConsumableShopOffer() {
-  const allTypes = Object.values(CONSUMABLE_TYPE);
+  // Start from every consumable type in the catalog.
+  let allTypes = Object.values(CONSUMABLE_TYPE);
+
+  // Does the player already hold a Resurrection Cross on the belt?
+  const holdsCross = consumableState.inventory.some(
+    entry => entry.type === CONSUMABLE_TYPE.RESURRECTION_CROSS
+  );
+
+  // If so, remove it from the candidate list so it can't be offered.
+  // (It is passive and auto-triggers, so a second copy would be wasted.)
+  if (holdsCross) {
+    allTypes = allTypes.filter(type => type !== CONSUMABLE_TYPE.RESURRECTION_CROSS);
+  }
+
+  // Shuffle and take N distinct types, as before. Even with the Cross
+  // removed there are 4 types left, so the offer is still full.
   consumableShopState.offer = shuffle(allTypes).slice(0, CONSUMABLE_SHOP_OFFER_COUNT);
   consumableShopState.purchasedTypes = [];
 }
-
 /**
  * Price for one consumable — a flat PERCENT of the score the player
  * had at shop-open (the shopEntryScore snapshot main.js already takes

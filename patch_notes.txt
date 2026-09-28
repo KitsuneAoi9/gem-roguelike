@@ -236,3 +236,9 @@ Patch Note 2026/09/29 v0.2.3.1
 3. Fixed the issue where the Hyperstar and special gems not triggering each other.
 
 4. Fixed the issue where the A Test of Endurance not rewarding when complete.
+
+========================================================================================================
+Patch Note 2026/09/30 v0.2.3.2
+
+1. Shop now no longer offers Resurrection Cross item if player already has unused Resurrection Cross on their item belt.
+=> Currently, player would buy the resurrection cross 100% of the time the moment it shows up in the shop. 
