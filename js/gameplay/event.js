@@ -25,7 +25,7 @@
 //     EVENT_ONLY_BOON_IDS instead of a rarity-based roll.
 // ============================================================
 
-import { BOON_POOL, BOON_RARITY, EVENT_ONLY_BOON_IDS } from '../resources/boon/boon.js';
+import { BOON_POOL, BOON_RARITY, EVENT_ONLY_BOON_IDS, SHOP_ONLY_BOON_IDS } from '../resources/boon/boon.js';
 import { gemUnlockState } from '../resources/gem/gem_unlock_state.js';
 import { activeEventState, eventState } from '../resources/event/event_state.js';
 import {
@@ -38,11 +38,11 @@ import { progressionState } from '../resources/progression/progression.js';
 import { boonState } from '../resources/boon/boon_state.js';
 import { boonEffectState } from '../resources/boon/boon_effect_state.js';
 import {
-  isBoonAvailable, pickBoon, grantBoonBypassingCap, removeActiveBoon, generateBoonOffer,
+  isBoonAvailable, isRarityAllowed, pickBoon, grantBoonBypassingCap, removeActiveBoon, generateBoonOffer,
 } from './boon.js';
 import { applyBoonEffect, reverseBoonEffect } from './boon_effects.js';
 import { calculateScoreTarget } from './progression.js';
-import { grantCurse } from './curse.js';
+import { grantCurse, pickRandomGemIdForCurse } from './curse.js';
 import { PLACEMENT_ONLY_KINDS } from './boon_shop.js';
 import { countGemClears, calculateGemAttributedScore } from './score.js';
 
@@ -83,17 +83,69 @@ export function formatNamedEffectSpan(def, isCurse = false) {
   return `<span class="event-inline-name ${rarityClass}" data-tooltip="${escapeHtmlAttr(def.description)}">${def.name}</span>`;
 }
 
-/** Every BOON_POOL entry of a given rarity safe to hand out as a random event reward.
+/**
+ * NEW — whether a boon is reserved for ONE specific source and must
+ * therefore never be handed out as a generic random event reward:
+ *   - EVENT_ONLY_BOON_IDS (Overcharge Essence): only the event that
+ *     explicitly names it (Test of Endurance) may grant it.
+ *   - SHOP_ONLY_BOON_IDS (Booner, VIP Membership Card): only the
+ *     Customer Service "Limited Edition Boons Sale" may sell them.
+ *   - perpetual_boon: a last-resort offer filler, never a "reward"
+ *     (same exclusion boon.js's offer generators already apply).
  *
- * @param {number} rarity
+ * Mirrors boon.js's isExcludedFromNormalOffers(), which isn't
+ * exported. It is duplicated here instead of exported from boon.js to
+ * keep this change to a single file; if the two ever drift, exporting
+ * that one and importing it here is the cleaner long-term fix.
+ *
+ * @param {object} def - a BOON_POOL entry.
+ * @returns {boolean} true if this boon must be skipped.
+ */
+function isReservedBoon(def) {
+  return def.id === 'perpetual_boon'
+    || EVENT_ONLY_BOON_IDS.has(def.id)
+    || SHOP_ONLY_BOON_IDS.has(def.id);
+}
+
+/**
+ * Every BOON_POOL entry of a given rarity safe to hand out as a random
+ * event reward (Boon Hoarder's win, Silent Vein's win, etc.).
+ *
+ * @param {string} rarity
+ * @param {boolean} bypassCap
+ * @param {number} gateLevel - the level that reward is FOR.
+ * @returns {object[]}
+ */
+function candidatePoolForRarity(rarity, bypassCap, gateLevel) {
+  return BOON_POOL.filter(def => {
+    if (def.rarity !== rarity) return false;
+
+    // NEW — reserved boons (event-only / shop-only / perpetual) can
+    // never come out of a random reward roll. Checked early since it's
+    // the cheapest and most decisive filter.
+    if (isReservedBoon(def)) return false;
+
+    if (PLACEMENT_ONLY_KINDS.has(def.effect?.kind)) return false;
+    if (def.effect?.gem && !gemUnlockState.unlocked[def.effect.gem]) return false;
+    // Rarity level-gate for event rewards.
+    if (!isRarityAllowed(def, 'event', gateLevel)) return false;
+    if (!bypassCap && !isBoonAvailable(def)) return false;
+    return true;
+  });
+}
+
+/**
+ * Every BOON_POOL entry flagged as event-only (EVENT_ONLY_BOON_IDS)
+ * that's currently available to grant. Used by checkChallengeLevelClear()
+ * for a `def.useEventOnlyRewardPool` challenge, instead of the normal
+ * rarity-based candidatePoolForRarity() above.
+ *
  * @param {boolean} bypassCap
  * @returns {object[]}
  */
-function candidatePoolForRarity(rarity, bypassCap) {
+function candidatesFromEventOnlyPool(bypassCap) {
   return BOON_POOL.filter(def => {
-    if (def.rarity !== rarity) return false;
-    if (PLACEMENT_ONLY_KINDS.has(def.effect?.kind)) return false;
-    if (def.effect?.gem && !gemUnlockState.unlocked[def.effect.gem]) return false;
+    if (!EVENT_ONLY_BOON_IDS.has(def.id)) return false;
     if (!bypassCap && !isBoonAvailable(def)) return false;
     return true;
   });
@@ -120,11 +172,22 @@ function candidatesFromEventOnlyPool(bypassCap) {
 // TRIGGER ROLL
 // ============================================================
 
+/**
+ * Finds a same-rarity replacement boon for the Gem Mole's trade.
+ *
+ * @param {object} givenDef - the BOON_POOL entry being traded away.
+ * @returns {object|null}
+ */
 function findReplacementBoon(givenDef) {
+  // An Encounter fires after the last queued reward, so the level
+  // "being rewarded" is the one just cleared.
+  const gateLevel = progressionState.level - 1;
   const candidates = BOON_POOL.filter(d =>
     d.rarity === givenDef.rarity &&
     d.id !== givenDef.id &&
+    !isReservedBoon(d) && // NEW — the mole can no longer hand out Booner/VIP/Overcharge Essence
     !PLACEMENT_ONLY_KINDS.has(d.effect?.kind) &&
+    isRarityAllowed(d, 'event', gateLevel) &&
     isBoonAvailable(d)
   );
   if (candidates.length === 0) return null;
@@ -139,8 +202,29 @@ function hasValidEncounterCandidate() {
   });
 }
 
-function hasValidChallengeReward() {
-  return candidatePoolForRarity(BOON_RARITY.LEGENDARY, false).length > 0;
+/**
+ * Whether this (rarity-rolled) challenge would have anything to give
+ * when it's finally won. The reward is granted on the LAST level of
+ * the challenge's window, so we check the gate against that level:
+ * (level about to be played) + durationLevels - 1.
+ */
+function hasValidChallengeReward(def) {
+  const rewardLevel = progressionState.level + (def.durationLevels || 1) - 1;
+  return candidatePoolForRarity(def.rewardRarity, false, rewardLevel).length > 0;
+}
+
+/**
+ * NEW — an Elite whose win reward is "grant boons" (Boon Hoarder) is
+ * only worth offering if that reward pool isn't empty at the level
+ * it'll be fought on. Without this, the new Epic level-lock would let
+ * a player "win" Boon Hoarder on level 2 and receive nothing.
+ * Elites with other reward kinds are always viable.
+ */
+function hasEligibleEliteReward(def) {
+  if (def.onWin?.kind !== 'grant_boons') return true;
+  // The fight happens on the level about to be played, and is won by
+  // clearing that same level.
+  return candidatePoolForRarity(def.onWin.rarity, def.onWin.bypassCap, progressionState.level).length > 0;
 }
 
 /**
@@ -155,10 +239,16 @@ function hasValidChallengeReward() {
  * @returns {boolean}
  */
 function isEncounterEligible(def, currentScore) {
+  // Never re-offer an event that already fired this run.
   if (eventState.seenEventIds.includes(def.id)) return false;
   if (def.kind === 'trade') return hasValidEncounterCandidate();
   if (def.kind === 'gamble') return currentScore > 0;
   if (def.kind === 'help_or_absorb') return true;
+  // Steal can always fire: curses are always available and the boon
+  // side is padded with Perpetual Boon if the pool is exhausted.
+  if (def.kind === 'steal') return true;
+  // The Mimic needs at least one held boon to bite.
+  if (def.kind === 'chest') return boonState.activeBoons.length > 0;
   return true;
 }
 
@@ -182,7 +272,7 @@ function hasEligibleChallenge() {
   return CHALLENGE_POOL.some(def => {
     if (eventState.seenEventIds.includes(def.id)) return false;
     if (def.useEventOnlyRewardPool) return true;
-    return hasValidChallengeReward();
+    return hasValidChallengeReward(def);
   });
 }
 
@@ -351,7 +441,7 @@ export function resolveLostMinerHelp(currentScore, def) {
  *   value" phrase in that case.
  */
 export function resolveLostMinerAbsorb() {
-  const offer = generateBoonOffer(1);
+  const offer = generateBoonOffer(1, progressionState.level - 1);
 
   let grantedBoonDef = null;
   if (offer.length > 0) {
@@ -378,6 +468,157 @@ export function resolveLostMinerAbsorb() {
 }
 
 // ============================================================
+// SHARED HELPERS — random curse / random boons for Encounters
+// ============================================================
+
+/**
+ * Grants ONE random curse from CURSE_POOL (every curse in the pool is
+ * eligible; duplicates are allowed since curses have no cap). Curses
+ * with unique/limited occurrences live outside this pool by design.
+ *
+ * Decaying Birthstone and Petrified need per-pick data (which gem they
+ * track/lock), supplied here at grant time exactly like grantCurse()
+ * documents.
+ *
+ * @returns {object} the CURSE_POOL def that was granted.
+ */
+function grantRandomCurse() {
+  // Uniform pick, with replacement across calls (duplicates OK).
+  const curseDef = CURSE_POOL[Math.floor(Math.random() * CURSE_POOL.length)];
+
+  // Build per-pick data only for the curses that need it.
+  let data = {};
+  if (curseDef.effect?.kind === 'lethal_gem_clear') {
+    // Decaying Birthstone: track a random unlocked gem, from 0 clears.
+    data = { trackedGemId: pickRandomGemIdForCurse(), clearCount: 0 };
+  } else if (curseDef.effect?.kind === 'gem_multiplier_lock') {
+    // Petrified: lock a random unlocked gem's multiplier at 0.
+    data = { lockedGem: pickRandomGemIdForCurse() };
+  }
+
+  // Same two-step every curse/boon grant follows: record, then apply.
+  const activeCurse = grantCurse(curseDef.id, data);
+  activeCurse.appliedEffect = applyBoonEffect(curseDef);
+  return curseDef;
+}
+
+/**
+ * Grants `count` random boons using the SAME rules as Lost Miner's
+ * absorb / the level-up reward: rarity-weighted, levelUp rarity gate,
+ * normal maxOccurrences cap, reserved boons excluded, and padded with
+ * Perpetual Boon if the pool runs dry (generateBoonOffer() does all of
+ * that). Boons within one call are distinct, except Perpetual padding.
+ *
+ * @param {number} count
+ * @returns {object[]} the BOON_POOL defs actually granted.
+ */
+function grantRandomBoons(count) {
+  if (count <= 0) return [];
+
+  // An Encounter fires after the last queued reward, so the level
+  // "being rewarded" is the one just cleared.
+  const offer = generateBoonOffer(count, progressionState.level - 1);
+
+  const granted = [];
+  for (const def of offer) {
+    const activeBoon = pickBoon(def.id);
+    if (!activeBoon) continue; // cap hit between offer and pick (very unlikely)
+    activeBoon.appliedEffect = applyBoonEffect(def);
+    granted.push(def);
+  }
+  return granted;
+}
+
+// ============================================================
+// MEDITATING ELF (steal)
+// ============================================================
+
+/**
+ * Resolves "Steal": for each of def.stealCount items, an independent
+ * 50/50 roll decides boon vs curse. Boons are granted first (one
+ * batched call, so they're distinct), then curses.
+ *
+ * @param {object} def - the meditating_elf ENCOUNTER_POOL entry.
+ * @returns {{ stolenSpans: string[], gotCurse: boolean }} display
+ *   spans for every stolen item, plus whether any was a curse.
+ */
+export function resolveMeditatingElfSteal(def) {
+  // Roll each item independently: true = boon, false = curse.
+  let boonRolls = 0;
+  let curseRolls = 0;
+  for (let i = 0; i < def.stealCount; i++) {
+    if (Math.random() < def.boonChance) boonRolls++;
+    else curseRolls++;
+  }
+
+  const stolenSpans = [];
+
+  // Boons (batched so the two can't be the same boon).
+  grantRandomBoons(boonRolls).forEach(boonDef => {
+    stolenSpans.push(formatNamedEffectSpan(boonDef));
+  });
+
+  // Curses (independent draws, duplicates allowed).
+  for (let i = 0; i < curseRolls; i++) {
+    stolenSpans.push(formatNamedEffectSpan(grantRandomCurse(), true));
+  }
+
+  return { stolenSpans, gotCurse: curseRolls > 0 };
+}
+
+// ============================================================
+// TO OPEN OR NOT TO OPEN (chest)
+// ============================================================
+
+/**
+ * Resolves "To open": rolls treasure vs Mimic (25%/75%).
+ *   - Treasure: grants 2 random boons, returns +15% score (never
+ *     negative — clamped to 0 if score is negative).
+ *   - Mimic: reverses + removes one random HELD boon, grants one
+ *     random curse in its place, returns -15% score (based on the
+ *     absolute value, so a negative score still goes DOWN).
+ * Score itself is applied by main.js, like every other event.
+ *
+ * @param {number} currentScore
+ * @param {object} def - the to_open_or_not_to_open entry.
+ * @returns {{
+ *   outcome: 'treasure'|'mimic',
+ *   scoreDelta: number,
+ *   boonSpans: string[],
+ *   curseSpan: string|null,
+ * }}
+ */
+export function resolveChestOpen(currentScore, def) {
+  const isTreasure = Math.random() < def.treasureChance;
+
+  if (isTreasure) {
+    const boonSpans = grantRandomBoons(def.treasureBoonCount)
+      .map(boonDef => formatNamedEffectSpan(boonDef));
+    // Clamp so treasure is never a penalty on a negative score.
+    const scoreDelta = Math.max(0, Math.round(currentScore * def.scorePercent));
+    return { outcome: 'treasure', scoreDelta, boonSpans, curseSpan: null };
+  }
+
+  // --- Mimic ---
+  // Pick a random held boon (eligibility guarantees at least one).
+  const victim = boonState.activeBoons[Math.floor(Math.random() * boonState.activeBoons.length)];
+  const victimDef = BOON_POOL.find(b => b.id === victim.id);
+  const victimSpan = victimDef ? formatNamedEffectSpan(victimDef) : 'a boon';
+
+  // Undo its effect FIRST, then remove it (same order as Gem Mole).
+  reverseBoonEffect(victim);
+  removeActiveBoon(victim.pickId);
+
+  // Replace it with a random curse.
+  const curseSpan = formatNamedEffectSpan(grantRandomCurse(), true);
+
+  // abs() so a negative score is still reduced, never raised.
+  const scoreDelta = -Math.round(Math.abs(currentScore) * def.scorePercent);
+
+  return { outcome: 'mimic', scoreDelta, boonSpans: [victimSpan], curseSpan };
+}
+
+// ============================================================
 // ELITE — generalized engine
 // ============================================================
 
@@ -393,7 +634,9 @@ function gemNameForId(gemId) {
 
 /** Picks one eligible, unseen Elite def and marks it seen immediately, or null if none remain. */
 export function pickEliteDef() {
-  const eligible = ELITE_POOL.filter(def => !eventState.seenEventIds.includes(def.id));
+  const eligible = ELITE_POOL.filter(def =>
+    !eventState.seenEventIds.includes(def.id) && hasEligibleEliteReward(def)
+  );
   if (eligible.length === 0) return null;
   const def = eligible[Math.floor(Math.random() * eligible.length)];
   markEventSeen(def.id);
@@ -474,7 +717,9 @@ function clearEliteState() {
 function applyEliteOutcomeEffect(effectSpec, currentScore) {
   switch (effectSpec.kind) {
     case 'grant_boons': {
-      const pool = candidatePoolForRarity(effectSpec.rarity, effectSpec.bypassCap);
+      // Gate level = the level being cleared right now (advanceLevel()
+      // hasn't run yet when an Elite resolves).
+      const pool = candidatePoolForRarity(effectSpec.rarity, effectSpec.bypassCap, progressionState.level);
       const grantedNames = [];
       for (let i = 0; i < effectSpec.count && pool.length > 0; i++) {
         const rewardDef = pool[Math.floor(Math.random() * pool.length)];
@@ -790,10 +1035,17 @@ export function applyChallengeDecayIfDue(currentScore) {
   let totalDeducted = 0;
 
   while (elapsed >= activeEventState.challengeDecayIntervalMs) {
-    const tickAmount = Math.round(workingScore * activeEventState.challengeDecayPercent);
+    // CHANGED — use the ABSOLUTE value of the score. Before, a
+    // negative score produced a negative "deduction", which main.js
+    // ignored (and which would have RAISED the score if applied).
+    // Now a tick is always a positive amount that gets subtracted,
+    // so the score keeps sinking: -100 -> -105 -> -110.25 ...
+    const tickAmount = Math.round(Math.abs(workingScore) * activeEventState.challengeDecayPercent);
     totalDeducted += tickAmount;
-    workingScore -= tickAmount;
+    workingScore -= tickAmount; // subtracting a positive number always moves the score DOWN
+
     elapsed -= activeEventState.challengeDecayIntervalMs;
+    // Advance by exact interval steps so no partial time is dropped.
     activeEventState.challengeLastDecayAt += activeEventState.challengeDecayIntervalMs;
   }
 
@@ -862,12 +1114,16 @@ export function checkChallengeLevelClear() {
       clearChallengeState();
       return { succeeded: false, resultText: def.loseText ?? def.failText, name };
     }
+    resultText = def.winText;
   }
 
   let resultText = def.failText ?? def.loseText;
+  // Called inside the level-clear loop, so progressionState.level is
+  // the level being cleared. The event-only pool is deliberately
+  // exempt from the rarity gate — it's a fixed, hand-designed reward.
   const pool = def.useEventOnlyRewardPool
     ? candidatesFromEventOnlyPool(false)
-    : candidatePoolForRarity(def.rewardRarity, false);
+    : candidatePoolForRarity(def.rewardRarity, false, progressionState.level);
 
   if (pool.length > 0) {
     for (let i = 0; i < def.rewardCount && pool.length > 0; i++) {

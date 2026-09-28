@@ -198,14 +198,14 @@ b. If there is at least one board-changing consumable in the belt, a dialog will
 8. Changed the global score formula. Global bonus score will now be added BEFORE global multiplier will be applied afterwards.
 => Updated the tooltips as well.
 
-9. Added new events: 2 Challenges, 
+9. Added new events: 2 Challenges, 2 Events
 
 10. Add Customer Service to Shop
 The shop now provides the following services which the player can only choose one:
 
 a. Curse Removal Service:
 Player can select and remove a curse.
-First time, cost 25% of current score when you enter shop.
+First time removal, cost 25% of current score when you enter shop.
 Second time, cost 50% of current score when you enter shop.
 Third time onwards, cost 75% of current score when you enter shop.
 
@@ -218,4 +218,10 @@ The shop will offer a shop-only boon to the player.
 
 13. Fix where Hyperstar is not activated when hit by special gems.
 
-14. TO DO needs to fix consumable don't count towards gem
+14. Fixed the issue where consumable isn't counted towards gem count.
+
+15. Added boon rarity gating.
+Epic no longer appears until level 5 (Only applies to the level-up rewards, and events)
+Legendary no longer appears until level 6 (Applies to level-up rewards, shops, and events)
+
+16. Fixed Golden Ticket issue where the program crashes when you use it.

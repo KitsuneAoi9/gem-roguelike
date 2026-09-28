@@ -9,7 +9,7 @@
 
 import { customerServiceState } from '../resources/shop/customer_service_state.js';
 import { BOON_POOL, SHOP_ONLY_BOON_IDS } from '../resources/boon/boon.js';
-import { isBoonAvailable } from './boon.js';
+import { isBoonAvailable, isRarityAllowed } from './boon.js';
 import { curseState } from '../resources/curse/curse_state.js';
 import { reverseBoonEffect } from './boon_effects.js';
 import { removeActiveCurse } from './curse.js';
@@ -71,8 +71,12 @@ export function removeCurseViaService(pickId) {
  *
  * @returns {void}
  */
-export function rollLimitedEditionBoonOffer() {
-  const available = BOON_POOL.filter(def => SHOP_ONLY_BOON_IDS.has(def.id) && isBoonAvailable(def));
+export function rollLimitedEditionBoonOffer(clearedLevel) {
+  const available = BOON_POOL.filter(def =>
+    SHOP_ONLY_BOON_IDS.has(def.id) &&
+    isBoonAvailable(def) &&
+    isRarityAllowed(def, 'shop', clearedLevel)
+  );
   customerServiceState.limitedEditionBoonId = available.length > 0
     ? available[Math.floor(Math.random() * available.length)].id
     : null;

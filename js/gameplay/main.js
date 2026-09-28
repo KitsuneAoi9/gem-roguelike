@@ -46,6 +46,17 @@ import {
 } from './boon_shop.js';
 
 import { resetCurses, getActiveCurseDefsByKind, recordDecayingBirthstoneActivity } from './curse.js';
+import {
+  tryTriggerEvent, buildEncounterOffer, resolveEncounterAccept, resolveEncounterDecline,
+  pickEliteDef, startEliteFight, declineElite, resolveEliteOutcome, getEliteProgressInfo,
+  pickChallengeDef, startChallenge, declineChallenge, markChallengeDetonation,
+  checkChallengeLevelClear, applyChallengeDecayIfDue, getActiveChallengeDef, resetEvents,
+  placeFortunesFollyBet, flipFortunesFollyDoubleOrNothing, payFortunesFollyAndLeave,
+  resolveLostMinerHelp, resolveLostMinerAbsorb,
+  resolveMeditatingElfSteal, resolveChestOpen,
+  recordEliteGemActivity,
+  formatNamedEffectSpan,
+} from './event.js';
 
 import { getGemBaseScore, getGemBaseMultiplier } from './gem_base.js';
 import { addHistoryEntry, resetHistory } from './history.js';
@@ -97,17 +108,6 @@ import {
 
 import { CURSE_POOL } from '../resources/curse/curse.js';
 import { curseState } from '../resources/curse/curse_state.js'; // NEW — needed for the curse-removal picker list
-
-import {
-  tryTriggerEvent, buildEncounterOffer, resolveEncounterAccept, resolveEncounterDecline,
-  pickEliteDef, startEliteFight, declineElite, resolveEliteOutcome, getEliteProgressInfo,
-  pickChallengeDef, startChallenge, declineChallenge, markChallengeDetonation,
-  checkChallengeLevelClear, applyChallengeDecayIfDue, getActiveChallengeDef, resetEvents,
-  placeFortunesFollyBet, flipFortunesFollyDoubleOrNothing, payFortunesFollyAndLeave,
-  resolveLostMinerHelp, resolveLostMinerAbsorb,
-  recordEliteGemActivity,
-  formatNamedEffectSpan,
-} from './event.js';
 import { EVENT_TYPE } from '../resources/event/event.js';
 import { activeEventState } from '../resources/event/event_state.js';
 
@@ -130,7 +130,7 @@ import {
   rollConsumableShopOffer, calculateConsumablePrice, isConsumablePurchasedThisVisit,
   markConsumablePurchased, resetConsumableShop,
 } from './consumable_shop.js';
-import { CONSUMABLE_INFO, CONSUMABLE_TYPE } from '../resources/consumable/consumable.js';
+import { CONSUMABLE_INFO, CONSUMABLE_TYPE, GOLDEN_TICKET_TURNS } from '../resources/consumable/consumable.js';
 import { consumableState } from '../resources/consumable/consumable_state.js';
 
 // The belt types that actually change the board layout (Pickaxe/
@@ -248,6 +248,15 @@ let pendingEventResult = null;
 let pendingConsumableEntry = null;
 let pendingGoldenTicketTurn = false;
 let goldenTicketTurnsRemaining = 0;
+
+// NEW — every level cleared by the current chain of score gains, in
+// order (e.g. [6,7,8,9,10] after a jump from 6 to 11). Filled by
+// applyScoreGain(), drained one entry at a time by runLevelUpQueue().
+let pendingClearedLevels = [];
+
+// NEW — which cleared level the CURRENTLY-shown level-up dialog /
+// boon dialog / shop is for. The Next Level button listener reads it.
+let pendingLevelUpClearedLevel = 1;
 
 // NEW — true while the Customer Service section is showing the
 // "select a curse to remove" list instead of its normal two cards.
@@ -463,18 +472,19 @@ function onBeltSlotClick(entry) {
  * Handles the board click that lands while a target-requiring
  * consumable (Pickaxe/Dynamite/Dice) is armed.
  *
+ * CHANGED THIS ROUND — Pickaxe/Dynamite clears now count toward the
+ * same event tracking a normal swap does: Elite gem-tracking,
+ * Silent Vein's detonation check, and Decaying Birthstone's lethal
+ * clear-count. Dice needed no change — it already runs through
+ * resolveMatches(), which does all of this itself.
+ *
  * @param {number} row
  * @param {number} col
  * @returns {void}
  */
 function handleConsumableTargetClick(row, col) {
   if (grid[row][col] === BLOCKED) return;
-  // NEW — an Obsidian cell can't be targeted either: nothing for
-  // Pickaxe/Dynamite to meaningfully destroy there beyond what a
-  // normal gem already offers, and Dice already excludes Obsidian
-  // from its own shuffle pool — blocking the click here too keeps
-  // the "select a target" flow consistent (clicking Obsidian just
-  // does nothing, same as clicking a BLOCKED cell).
+  // Obsidian can't be targeted (nothing meaningful to destroy there).
   if (grid[row][col] === OBSIDIAN) return;
 
   const entry = pendingConsumableEntry;
@@ -483,10 +493,8 @@ function handleConsumableTargetClick(row, col) {
   busy = true;
   messageEl.textContent = '';
 
-  // NEW — Dice's own branch: no clearing, no scoring at all, just a
-  // scoped 3x3 color shuffle, then let the normal cascade pipeline
-  // catch whatever matches the shuffle happens to create (same as
-  // the old whole-board Dice used to do, just scoped to the area).
+  // Dice: no clearing/scoring, just a scoped 3x3 shuffle; the normal
+  // cascade pipeline then catches (and tracks) any matches it creates.
   if (entry.type === CONSUMABLE_TYPE.DICE) {
     triggerDiceShuffleArea(grid, row, col);
 
@@ -498,8 +506,6 @@ function handleConsumableTargetClick(row, col) {
     renderHistoryPanel();
 
     comboCount = 0;
-    // No swapCells — this isn't a swap, so any special gem that DOES
-    // happen to spawn falls back to the normal spawn rule.
     resolveMatches();
     return;
   }
@@ -523,20 +529,34 @@ function handleConsumableTargetClick(row, col) {
     return;
   }
 
+  // Every consumable-cleared cell scores as a flat "incidental" cell
+  // (no formed match), same as the swap-activated combos do.
+  const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
+
+  // NEW — Silent Vein: a "detonation" means a special gem fired. If any
+  // cleared cell holds one (targeted directly OR reached by a chain
+  // reaction), count it. Checked NOW, while specialGemState still
+  // holds those cells — continueCascadeAfterMatch() clears them later.
+  const specialGemFired = clearedCells.some(([r, c]) => !!specialGemState.grid[r][c]);
+  if (specialGemFired) markChallengeDetonation();
+
+  // NEW — Elite gem_cap / gem_subscore_race tracking. Must run BEFORE
+  // applyScoreGain(), since that may resolve the Elite on a level-clear.
+  // matchedGroups is empty (nothing was "matched"); comboCount is 1.
+  recordEliteGemActivity([], incidentalCells, 1);
+
+  // NEW — Decaying Birthstone lethal check (same order as the swap
+  // combos in finishSwapActivatedCombo()). If it kills the run, stop.
+  if (checkDecayingBirthstoneLethal([], incidentalCells)) return;
+
+  updateObjectiveBanner(); // reflect any new Elite count / detonation
   comboCount = 0;
 
-  const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
   const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
-
   const leveledUp = applyScoreGain(gained, `${comboLabel}: ${signed(gained)}`);
   if (leveledUp) pendingLevelUp = true;
 
   markMatchedGems(boardEl, toBooleanGrid(clearedCells));
-
-  // NOT routed through recordEliteGemActivity()/markChallengeDetonation()
-  // or recordDecayingBirthstoneActivity() — consumables don't interact
-  // with an active Elite/Challenge/Decaying-Birthstone's tracking yet.
-  // Known gap, see handoff.
   continueCascadeAfterMatch(clearedCells);
 }
 
@@ -763,6 +783,8 @@ function init() {
   pendingConsumableEntry = null;
   pendingGoldenTicketTurn = false;
   goldenTicketTurnsRemaining = 0;
+  pendingClearedLevels = []; // NEW — never carry a queued reward into a fresh run
+  pendingLevelUpClearedLevel = 1;
   curseRemovalPickerOpen = false; // NEW
 
   scoreEl.textContent = score;
@@ -917,6 +939,10 @@ function showEncounterDialog(offer, onContinue) {
     showFortunesFollyDialog(offer.def, onContinue);
   } else if (offer.kind === 'help_or_absorb') {
     showLostMinerDialog(offer.def, onContinue);
+  } else if (offer.kind === 'steal') {
+    showMeditatingElfDialog(offer.def, onContinue);
+  } else if (offer.kind === 'chest') {
+    showChestDialog(offer.def, onContinue);
   } else {
     onContinue();
   }
@@ -1092,6 +1118,95 @@ function showLostMinerDialog(def, onContinue) {
 
   eventChoicesEl.appendChild(helpBtn);
   eventChoicesEl.appendChild(absorbBtn);
+  eventChoicesEl.appendChild(leaveBtn);
+  eventDialogEl.classList.remove('hidden');
+}
+
+/** Meditating Elf's steal-or-leave choice. */
+function showMeditatingElfDialog(def, onContinue) {
+  // Standard event header + numbered single-column choice list.
+  eventTitleEl.textContent = formatEventTitle(EVENT_TYPE.ENCOUNTER, def.name);
+  eventStoryEl.textContent = def.storyText;
+  eventChoicesEl.className = 'event-choices event-choices--list';
+  eventChoicesEl.innerHTML = '';
+
+  const stealBtn = document.createElement('button');
+  stealBtn.textContent = `1. ${def.stealLabel}`;
+  stealBtn.addEventListener('click', () => {
+    // Roll + grant everything (boons and/or curses).
+    const { stolenSpans, gotCurse } = resolveMeditatingElfSteal(def);
+
+    // Boons/curses can change stats and (Weight of Greed) the target.
+    renderSideStats();
+    targetEl.textContent = progressionState.scoreTarget;
+
+    const text = def.stealResultText(stolenSpans);
+    // Red if any curse came along, otherwise the plain event color.
+    addHistoryEntry('event', `Meditating Elf: ${text}`, gotCurse ? 'negative' : 'event');
+    renderHistoryPanel();
+    showEventResult(text, onContinue);
+  });
+
+  const leaveBtn = document.createElement('button');
+  leaveBtn.textContent = `2. ${def.leaveLabel}`;
+  leaveBtn.addEventListener('click', () => {
+    // Pure no-op choice: just log and show the flavor text.
+    addHistoryEntry('event', `Meditating Elf: ${def.leaveResultText}`, 'event');
+    renderHistoryPanel();
+    showEventResult(def.leaveResultText, onContinue);
+  });
+
+  eventChoicesEl.appendChild(stealBtn);
+  eventChoicesEl.appendChild(leaveBtn);
+  eventDialogEl.classList.remove('hidden');
+}
+
+/** To Open or To Not Open's chest choice (25% treasure / 75% Mimic). */
+function showChestDialog(def, onContinue) {
+  eventTitleEl.textContent = formatEventTitle(EVENT_TYPE.ENCOUNTER, def.name);
+  eventStoryEl.textContent = def.storyText;
+  eventChoicesEl.className = 'event-choices event-choices--list';
+  eventChoicesEl.innerHTML = '';
+
+  const openBtn = document.createElement('button');
+  openBtn.textContent = `1. ${def.openLabel}`;
+  openBtn.addEventListener('click', () => {
+    // The 25/75 roll happens here, at the moment the player opens it.
+    const result = resolveChestOpen(score, def);
+
+    // Apply the score change (main.js owns `score`).
+    score += result.scoreDelta;
+    scoreEl.textContent = score;
+
+    // Refresh panels + target (a curse may raise the target score).
+    renderSideStats();
+    targetEl.textContent = progressionState.scoreTarget;
+
+    // Build the outcome-specific text.
+    let text;
+    if (result.outcome === 'treasure') {
+      text = def.openTreasureText(result.boonSpans, result.scoreDelta);
+    } else {
+      // Show the amount lost as a positive number in the text.
+      text = def.openMimicText(result.boonSpans[0], result.curseSpan, Math.abs(result.scoreDelta));
+    }
+
+    // Treasure = good (boon violet is reserved for picks, so use
+    // 'positive'); Mimic = bad.
+    addHistoryEntry('event', `To Open or To Not Open: ${text}`, result.outcome === 'treasure' ? 'positive' : 'negative');
+    renderHistoryPanel();
+    showEventResult(text, onContinue);
+  });
+
+  const leaveBtn = document.createElement('button');
+  leaveBtn.textContent = `2. ${def.leaveLabel}`;
+  leaveBtn.addEventListener('click', () => {
+    addHistoryEntry('event', `To Open or To Not Open: ${def.leaveResultText}`, 'event');
+    renderHistoryPanel();
+    showEventResult(def.leaveResultText, onContinue);
+  });
+
+  eventChoicesEl.appendChild(openBtn);
   eventChoicesEl.appendChild(leaveBtn);
   eventDialogEl.classList.remove('hidden');
 }
@@ -1355,6 +1470,10 @@ function applyScoreGain(gained, popupText) {
     if (activeEventState.type === EVENT_TYPE.CHALLENGE) {
       challengeOutcome = checkChallengeLevelClear();
     }
+    // NEW — remember WHICH level just got cleared (progression hasn't
+    // advanced yet, so this is still the cleared level). Every level
+    // this loop crosses gets its own reward in the queue later.
+    pendingClearedLevels.push(progressionState.level);
 
     advanceLevel();
     if (ENABLE_MOVES_LIMIT) {
@@ -1896,8 +2015,11 @@ function resolveMatches(swapCells = null) {
       const eventResult = pendingEventResult;
       pendingEventResult = null;
 
+      // CHANGED — instead of a single level-up dialog, run the whole
+      // queue: one reward (+ shop when due) per cleared level, in
+      // order, then the event roll, then hand control back.
       const proceedToLevelUp = () => {
-        showLevelUpDialog(() => {
+        runLevelUpQueue(() => {
           busy = false;
           checkEndState();
         });
@@ -1983,30 +2105,63 @@ function continueCascadeAfterMatch(clearedCells) {
 }
 
 /**
- * Shows the "Level Cleared!" dialog.
+ * NEW — walks every level cleared by the last score gain, in order.
+ * For each level: "Level N Cleared!" dialog -> boon pick (+ Booner
+ * bonus offer) -> shop if N is a shop level -> (tile placement if the
+ * boon needs one). Only after the LAST level does the random event
+ * roll happen, since Elite/Challenge attach to the level about to be
+ * played, not to one that was skipped through.
  *
- * @param {() => void} onContinue
+ * @param {() => void} onAllDone - called once the queue and the
+ *   event roll have completely finished.
  * @returns {void}
  */
-function showLevelUpDialog(onContinue) {
+function runLevelUpQueue(onAllDone) {
+  // Copy then empty the shared list so nothing re-processes it.
+  const queue = pendingClearedLevels.slice();
+  pendingClearedLevels.length = 0;
+
+  const processNext = () => {
+    // Queue exhausted -> roll the (single) event, then finish.
+    if (queue.length === 0) {
+      attemptEvent(onAllDone);
+      return;
+    }
+
+    const clearedLevel = queue.shift();
+    // Each step's continuation is simply "do the next queued level".
+    showLevelUpDialog(clearedLevel, processNext);
+  };
+
+  processNext();
+}
+
+/**
+ * Shows the "Level N Cleared!" dialog for one queued level.
+ *
+ * @param {number} clearedLevel - the level this dialog/reward is for.
+ * @param {() => void} onContinue - called after this level's boon
+ *   pick and shop (if any) are fully done.
+ * @returns {void}
+ */
+function showLevelUpDialog(clearedLevel, onContinue) {
   pendingContinuation = onContinue;
+  pendingLevelUpClearedLevel = clearedLevel;
+  // Interpolated text stays in main.js (Rule 7).
+  levelUpTitleEl.textContent = `Level ${clearedLevel} Cleared!`;
   levelUpDialogEl.classList.remove('hidden');
 }
 
 /**
- * NEW — Booner's stacking chance of an extra boon offer. Checked ONCE
- * right after the FIRST offer's pick resolves (never re-checked for
- * the bonus offer itself — see showBoonDialog()'s `isBonusOffer` flag
- * — so at most one bonus offer is ever granted per level, regardless
- * of how many Booner copies are held; only the CHANCE of getting that
- * one bonus offer scales with copies, additively (+25% per copy, same
- * convention Entropy/Luminous/Explosive Shard already use).
+ * Booner's stacking chance of an extra boon offer (unchanged logic).
+ * CHANGED — takes `clearedLevel` so the bonus offer is gated by the
+ * same level as the normal offer it follows.
  *
- * @param {() => void} onDone - called once the (possible) bonus pick
- *   has fully resolved, or immediately if it didn't trigger at all.
+ * @param {() => void} onDone
+ * @param {number} clearedLevel
  * @returns {void}
  */
-function maybeGrantBoonerBonusOffer(onDone) {
+function maybeGrantBoonerBonusOffer(onDone, clearedLevel) {
   const boonerCount = countActiveBoon('booner');
   if (boonerCount === 0 || Math.random() >= 0.25 * boonerCount) {
     onDone();
@@ -2015,24 +2170,24 @@ function maybeGrantBoonerBonusOffer(onDone) {
 
   addHistoryEntry('event', 'Booner grants a bonus boon offer!', 'event');
   renderHistoryPanel();
-  showBoonDialog(onDone, true); // isBonusOffer=true — never re-rolls Booner itself
+  showBoonDialog(onDone, clearedLevel, true); // isBonusOffer=true — never re-rolls Booner itself
 }
 
 /**
  * Builds and shows the pick-one-of-three boon dialog.
  *
- * CHANGED THIS ROUND — new `isBonusOffer` parameter (default false).
- * A normal (non-bonus) pick rolls Booner's bonus-offer chance right
- * after resolving; a bonus offer (isBonusOffer=true) skips that
- * check entirely, so bonus offers can never chain into further bonus
- * offers.
+ * CHANGED THIS ROUND — new `clearedLevel` parameter (2nd), used for
+ * the offer's rarity gates and passed on to the shop step.
  *
  * @param {() => void} onContinue
+ * @param {number} clearedLevel - the level this reward is FOR.
  * @param {boolean} [isBonusOffer=false]
  * @returns {void}
  */
-function showBoonDialog(onContinue, isBonusOffer = false) {
-  const offer = generateBoonOffer(3);
+function showBoonDialog(onContinue, clearedLevel, isBonusOffer = false) {
+  // Offer is generated against the level being rewarded, NOT the
+  // (possibly much higher) current level.
+  const offer = generateBoonOffer(3, clearedLevel);
 
   if (offer.length === 0) {
     onContinue();
@@ -2065,17 +2220,16 @@ function showBoonDialog(onContinue, isBonusOffer = false) {
       renderSideStats();
       boonDialogEl.classList.add('hidden');
 
-      const boonTone = def.type === BOON_TYPE.CURSE ? 'negative'
-        : def.type === BOON_TYPE.BUFF ? 'positive'
-        : 'neutral';
       addHistoryEntry('boon', `Boon picked: ${def.name} — ${def.description}`, 'boon');
       renderHistoryPanel();
 
-      const finishThisPick = () => proceedAfterBoonPick(def, onContinue);
+      // What happens after THIS pick: shop (if due) then placement.
+      const finishThisPick = () => proceedAfterBoonPick(def, onContinue, clearedLevel);
       if (isBonusOffer) {
         finishThisPick();
       } else {
-        maybeGrantBoonerBonusOffer(finishThisPick);
+        // Booner may add one bonus offer for this same level first.
+        maybeGrantBoonerBonusOffer(finishThisPick, clearedLevel);
       }
     });
 
@@ -2086,54 +2240,64 @@ function showBoonDialog(onContinue, isBonusOffer = false) {
 }
 
 /**
- * Decides what happens immediately after a FREE level-up boon has
- * been picked and applied.
+ * Decides what happens right after a level-up boon pick resolves.
+ *
+ * CHANGED THIS ROUND:
+ *   - Uses `clearedLevel` (the level this reward is for) for the shop
+ *     check instead of progressionState.level - 1, which is wrong
+ *     while several queued rewards are being processed.
+ *   - No longer rolls the random event itself — runLevelUpQueue() does
+ *     that once, after the LAST queued level.
  *
  * @param {object} def
- * @param {() => void} onContinue
+ * @param {() => void} onContinue - next queued level (or event roll).
+ * @param {number} clearedLevel
  * @returns {void}
  */
-function proceedAfterBoonPick(def, onContinue) {
+function proceedAfterBoonPick(def, onContinue, clearedLevel) {
   const isBoardShapeBoon =
     def.effect.kind === 'board_expand' ||
     def.effect.kind === 'board_shrink' ||
     def.effect.kind === 'board_expand_and_shrink';
 
-  const continueToNextLevel = () => attemptEvent(onContinue);
-
+  // After the shop: board-shape boons still need their placement
+  // step; everything else moves straight on.
   const afterShop = () => {
     if (isBoardShapeBoon) {
-      startTilePlacement(def, continueToNextLevel);
+      startTilePlacement(def, onContinue);
     } else {
-      continueToNextLevel();
+      onContinue();
     }
   };
 
-  const levelJustCleared = progressionState.level - 1;
-  if (shouldOpenShop(levelJustCleared)) {
-    openShopDialog(afterShop);
+  // Shop opens per queued level, so a 4 -> 11 jump visits the shop
+  // after level 5's reward AND after level 10's reward.
+  if (shouldOpenShop(clearedLevel)) {
+    openShopDialog(afterShop, clearedLevel);
   } else {
     afterShop();
   }
 }
 
 /**
- * Opens the boon shop.
+ * Opens the shop for one cleared level.
  *
- * CHANGED THIS ROUND — also resets/re-rolls the Customer Service
- * section for this fresh visit.
+ * CHANGED THIS ROUND — takes `clearedLevel`; tier, boon offer and the
+ * Limited Edition slot are all derived from it rather than from
+ * progressionState.level.
  *
  * @param {() => void} onContinue
+ * @param {number} clearedLevel
  * @returns {void}
  */
-function openShopDialog(onContinue) {
-  currentShopTier = shopTierForLevel(progressionState.level - 1);
-  shopEntryScore = score;
-  rollBoonShopOffer();
+function openShopDialog(onContinue, clearedLevel) {
+  currentShopTier = shopTierForLevel(clearedLevel);
+  shopEntryScore = score; // pricing snapshot, unchanged
+  rollBoonShopOffer(clearedLevel);
   rollConsumableShopOffer();
-  resetCustomerServiceVisit(); // NEW
-  rollLimitedEditionBoonOffer(); // NEW
-  curseRemovalPickerOpen = false; // NEW
+  resetCustomerServiceVisit();
+  rollLimitedEditionBoonOffer(clearedLevel);
+  curseRemovalPickerOpen = false;
   shopContinuation = onContinue;
   renderShopDialog();
   shopDialogEl.classList.remove('hidden');
@@ -2548,7 +2712,8 @@ loseRestartBtn.addEventListener('click', () => {
 });
 levelUpNextBtn.addEventListener('click', () => {
   levelUpDialogEl.classList.add('hidden');
-  showBoonDialog(pendingContinuation);
+  // Pass along WHICH level this reward is for so rarity gates use it.
+  showBoonDialog(pendingContinuation, pendingLevelUpClearedLevel);
 });
 shopLeaveBtn.addEventListener('click', () => {
   shopDialogEl.classList.add('hidden');

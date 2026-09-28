@@ -111,6 +111,67 @@ export const ENCOUNTER_POOL = [
     leaveResultText:
       "You glance at the trapped miner one last time before turning away. You decide that their fate is not your concern.\n\n\u201cWait! You can't just leave me here!\u201d\n\nTheir desperate cries echo through the tunnels as you walk away, eventually fading into the darkness.",
   },
+  // ============================================================
+  // MEDITATING ELF — kind 'steal'.
+  // Two independent 50/50 rolls (boon or curse) decide what the
+  // player steals: 25% two boons, 25% two curses, 50% one of each.
+  // ============================================================
+  {
+    id: 'meditating_elf',
+    kind: 'steal',
+    name: 'The Meditating Elf',
+    storyText:
+      "You happen upon a strange elven creature crouching in a secluded corner, desperately trying to conceal itself in the darkness.\n\n" +
+      "You watch from a distance as it hurriedly stuffs its boons and curses into a worn bag, checking around to make sure nobody has noticed. Once everything is safely tucked away, it settles down, closes its eyes, and begins to meditate.\n\n" +
+      "Its breathing slows. Its body relaxes. Whatever awareness it had of the outside world seems to disappear completely.\n\n" +
+      "The bag rests beside it, unattended.\n\n" +
+      "You could probably take something before it notices.\n\n" +
+      "But in this darkness, you won't be able to tell what you're grabbing.",
+    stealLabel: 'Steal',
+    leaveLabel: 'Mind your own business',
+    stealCount: 2,       // how many items are taken from the bag
+    boonChance: 0.5,     // per item: 50% boon, 50% curse
+    // `names` is an array of pre-built HTML spans (boon/curse names).
+    stealResultText: (names) =>
+      `You carefully approach the creature and reach into its bag. Your hand disappears into the darkness, brushing past strange objects of all shapes and sizes. You feel around for something valuable, but there is no way to tell a boon from a curse until you pull it out.\n\n` +
+      `You steal ${names.join(' and ')} from its bag.`,
+    leaveResultText:
+      "You decide that rummaging through a meditating creature's belongings is probably more trouble than it's worth. You quietly leave the creature to its meditation, taking care not to disturb it.",
+  },
+  // ============================================================
+  // TO OPEN OR NOT TO OPEN — kind 'chest'.
+  // 25% treasure (2 boons + 15% score), 75% Mimic (one held boon is
+  // turned into a curse + lose 15% score). Rolled on click.
+  // ============================================================
+  {
+    id: 'to_open_or_not_to_open',
+    kind: 'chest',
+    name: 'To Open or To Not Open',
+    storyText:
+      "You come across a chest sitting alone in the darkness. It is covered in elaborate decorations, its edges adorned with intricate metalwork and faded gemstones. Despite its age and worn appearance, a faint aura of treasure radiates from within. Whatever is inside, it is valuable.\n\n" +
+      "Then you notice the skeleton lying beside it.\n\n" +
+      "You stop.\n\n" +
+      "You have heard stories about Mimics\u2014creatures that disguise themselves as treasure chests, waiting patiently for some unfortunate fool to open them.\n\n" +
+      "You look at the chest again.\n\n" +
+      "It looks like a perfectly ordinary chest.\n\n" +
+      "Perhaps a little too ordinary.\n\n" +
+      "You could open it and find a fortune.\n\n" +
+      "Or you could become the next skeleton beside it.",
+    openLabel: 'To open',
+    leaveLabel: 'Not to open',
+    treasureChance: 0.25,   // chance the chest is real treasure
+    treasureBoonCount: 2,   // boons granted on treasure
+    scorePercent: 0.15,     // +15% on treasure, -15% on Mimic
+    // `names` = array of boon-name spans, `amount` = score gained.
+    openTreasureText: (names, amount) =>
+      `The lid creaks open. You brace yourself for teeth, but instead, a warm golden light spills from within. Beneath the dust and cobwebs lies a small hoard of treasure, along with two boons gleaming among the gems. Maybe the skeleton was simply unlucky.\n\n` +
+      `You obtained ${names.join(' and ')} and 15% of your current score (${amount}).`,
+    // `boonName`/`curseName` = HTML spans, `amount` = score lost.
+    openMimicText: (boonName, curseName, amount) =>
+      `The moment you lift the lid, the chest snaps open with a violent screech. Rows of teeth emerge from inside as the Mimic lunges forward and clamps down on one of your boons. Strange, dark energy seeps from its jaws into the boon, twisting its power into something foul. The Mimic tears itself away, turning ${boonName} into ${curseName} and devouring 15% of your current score (${amount}).`,
+    leaveResultText:
+      "You take one last look at the chest. Whatever treasure lies inside, the skeleton beside it is a convincing argument to leave it alone. You swallow your curiosity and walk away.",
+  },
 ];
 
 // --- Elite pool (unchanged) ---
