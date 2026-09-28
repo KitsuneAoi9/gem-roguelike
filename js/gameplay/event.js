@@ -1102,7 +1102,6 @@ export function checkChallengeLevelClear() {
       clearChallengeState();
       return { succeeded: false, resultText: def.loseText ?? def.failText, name };
     }
-    resultText = def.winText;
   }
 
   let resultText = def.failText ?? def.loseText;

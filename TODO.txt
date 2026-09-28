@@ -65,33 +65,4 @@ Phase 4 v0.4.x.x (Still planning)
 
 
 ToDo
-1. Fix Dice 
-
-2. Ramp up difficulty for The silent vein. It will now last multiple levels.
-
-3. Getting special gems
-OO
-OO
-OO
-
-4. Star exploded by another special gems, doesn't do anything. 
-
-5. Change the global score formula, it will now add the bonus score then apply multiplier.
-
-6. Added boon
-
-7. Added Removal service to the shop
-
-8.
-
-
-
-A Test of Endurance - lose conditions is within 10 minutes
-
-Overcharge Essence
-Obsidian Cultivation
-
-Removal + shop-only boon shop
-booner	Booner	25% chance of getting another boon offer.	BUFF	RARE	3
-
-Potion to show only icon 
+1. Fix encounter dialogue screen to show boon name tooltips
