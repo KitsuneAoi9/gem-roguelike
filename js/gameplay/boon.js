@@ -113,6 +113,14 @@ function isExcludedFromNormalOffers(def) {
  * candidates and rerolls (the existing `continue` below), so the
  * player never sees a short offer.
  *
+ * NEW — Perpetual Boon is excluded from the normal candidate pool
+ * entirely (see the `available` filter below), and only ever gets
+ * added at the very end, as a last-resort filler, if the pool
+ * genuinely couldn't fill every slot with a real, distinct boon.
+ *
+ * CHANGED THIS ROUND — the `available` filter now also excludes
+ * EVENT_ONLY_BOON_IDS, alongside the existing 'perpetual_boon' exclusion.
+ *
  * @param {number} [count=3]
  * @param {number} [clearedLevel] - defaults to the last level cleared
  *   (progressionState.level - 1), which is correct for callers that
