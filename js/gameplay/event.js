@@ -151,23 +151,6 @@ function candidatesFromEventOnlyPool(bypassCap) {
   });
 }
 
-/**
- * Every BOON_POOL entry flagged as event-only (EVENT_ONLY_BOON_IDS)
- * that's currently available to grant. Used by checkChallengeLevelClear()
- * for a `def.useEventOnlyRewardPool` challenge, instead of the normal
- * rarity-based candidatePoolForRarity() above.
- *
- * @param {boolean} bypassCap
- * @returns {object[]}
- */
-function candidatesFromEventOnlyPool(bypassCap) {
-  return BOON_POOL.filter(def => {
-    if (!EVENT_ONLY_BOON_IDS.has(def.id)) return false;
-    if (!bypassCap && !isBoonAvailable(def)) return false;
-    return true;
-  });
-}
-
 // ============================================================
 // TRIGGER ROLL
 // ============================================================
