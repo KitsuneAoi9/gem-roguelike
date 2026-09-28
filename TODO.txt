@@ -49,10 +49,13 @@ Phase 3A starting v0.3.0.x
 
 Phase 3B starting from v0.3.3.x
 -> Move to new engine (Godot)
+-> Implement new UI/UX
 
 Phase 3C starting from v0.3.6.x
 -> Add player profiles.
 -> Add Save/Load function.
+-> Implement shape overlap judgement function
+-> Improve UI/UI
 
 Phase 4 v0.4.x.x (Still planning)
 -> Implement Meta-progress

@@ -625,3 +625,20 @@
   gap: 12px;
   justify-content: center;
 }
+
+/* ============================================================
+   SHOP — SINGLE-ROW BOON CARDS ON WIDE SCREENS
+   All 5 boon cards need ~1270px (5 x 230px cards + 4 x 14px gaps +
+   the dialog's own 64px padding). Only when the viewport is wide
+   enough for that do we widen the dialog and stop the cards wrapping.
+   Below this width the original 3-per-row wrapping layout still applies.
+   ============================================================ */
+@media (min-width: 1400px) {
+  .shop-dialog-box {
+    max-width: 1320px; /* fits 5 cards (1206px) + padding (64px) with a little slack */
+  }
+
+  .shop-choices {
+    flex-wrap: nowrap; /* keep every boon card on ONE row */
+  }
+}

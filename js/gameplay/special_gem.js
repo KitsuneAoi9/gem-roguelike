@@ -65,6 +65,80 @@ function inBounds(row, col) {
 }
 
 /**
+ * True if a cell can be destroyed by a special-gem blast or a
+ * consumable: it must be on the board, not BLOCKED (null), and NOT
+ * an Obsidian gem. Obsidian is permanent — only gravity (falling off
+ * the bottom) or a reshuffle may remove it. Exported so
+ * consumable.js reuses the exact same rule (single source of truth).
+ *
+ * @param {number[][]} grid
+ * @param {number} row
+ * @param {number} col
+ * @returns {boolean}
+ */
+export function isDestroyable(grid, row, col) {
+  return inBounds(row, col)          // must be inside the allocated grid
+    && grid[row][col] != null        // BLOCKED cells (null) can't be cleared
+    && grid[row][col] !== OBSIDIAN;  // Obsidian is immune to blasts
+}
+
+/**
+ * Expands a set of already-cleared cells into EVERYTHING that ends up
+ * cleared once special gems caught inside them fire (chain reaction).
+ * Same rules as the passive match path and consumables:
+ *   - Laser -> its row/column, Discharger -> its diamond
+ *   - Hyperstar -> wipes one random gem color
+ *   - Obsidian/blocked cells are never destroyed (isDestroyable)
+ *
+ * @param {number[][]} grid
+ * @param {[number, number][]} initialCells - cells the combo cleared.
+ * @param {Set<string>} [skipKeys] - "row,col" keys whose special must
+ *   NOT fire again (the swapped gems that already activated).
+ * @returns {[number, number][]} every cell cleared, initial included.
+ */
+export function expandChainReaction(grid, initialCells, skipKeys = new Set()) {
+  const cleared = new Set(initialCells.map(([r, c]) => `${r},${c}`));
+  const queue = [...cleared];
+  const processed = new Set();
+
+  while (queue.length) {
+    const key = queue.pop();
+    if (processed.has(key)) continue; // each cell is processed once
+    processed.add(key);
+
+    // The swapped specials already activated; don't fire them again.
+    if (skipKeys.has(key)) continue;
+
+    const [r, c] = key.split(',').map(Number);
+    const specialType = specialGemState.grid[r][c];
+    if (!specialType) continue; // plain gem, nothing to trigger
+
+    // A Hyperstar caught in the area wipes one random color.
+    if (specialType === SPECIAL_GEM_TYPE.HYPERSTAR) {
+      triggerRandomHyperstarWipe(grid).forEach(([wr, wc]) => {
+        const wKey = `${wr},${wc}`;
+        if (!cleared.has(wKey)) { cleared.add(wKey); queue.push(wKey); }
+      });
+      continue;
+    }
+
+    // Lasers/Dischargers add their own blast shape.
+    const blast = specialType === SPECIAL_GEM_TYPE.LASER_ROW ? laserRowBlastCells(r, c)
+      : specialType === SPECIAL_GEM_TYPE.LASER_COL ? laserColBlastCells(r, c)
+      : specialType === SPECIAL_GEM_TYPE.DISCHARGER ? dischargerBlastCells(r, c)
+      : [];
+
+    for (const [br, bc] of blast) {
+      if (!isDestroyable(grid, br, bc)) continue;
+      const bKey = `${br},${bc}`;
+      if (!cleared.has(bKey)) { cleared.add(bKey); queue.push(bKey); }
+    }
+  }
+
+  return [...cleared].map(key => key.split(',').map(Number));
+}
+
+/**
  * Flood-fills matched[][], grouping same-type matched cells that
  * touch each other into one group.
  *
@@ -513,7 +587,8 @@ export function resolveSpecialGems(grid, matched, swapCells = null) {
       : [];
 
     for (const [br, bc] of blast) {
-      if (!inBounds(br, bc) || grid[br][bc] == null) continue;
+      // Skip off-board, blocked, and Obsidian cells — a blast never destroys Obsidian.
+      if (!isDestroyable(grid, br, bc)) continue;
       const bKey = `${br},${bc}`;
       if (!clearedKeys.has(bKey)) {
         clearedKeys.add(bKey);
@@ -667,7 +742,8 @@ export function triggerHyperstarLaserCombo(grid, hyperRow, hyperCol, targetGemTy
       ? laserRowBlastCells(row, col)
       : laserColBlastCells(row, col);
     blast.forEach(([br, bc]) => {
-      if (inBounds(br, bc) && grid[br][bc] != null) cleared.add(`${br},${bc}`);
+      // Obsidian survives the laser blasts too.
+      if (isDestroyable(grid, br, bc)) cleared.add(`${br},${bc}`);
     });
   });
 
@@ -701,7 +777,7 @@ export function triggerHyperstarDischargerCombo(grid, hyperRow, hyperCol, target
   convertedDischargers.forEach(({ row, col }) => {
     cleared.add(`${row},${col}`);
     dischargerBlastCells(row, col).forEach(([br, bc]) => {
-      if (inBounds(br, bc) && grid[br][bc] != null) cleared.add(`${br},${bc}`);
+      if (isDestroyable(grid, br, bc)) cleared.add(`${br},${bc}`);
     });
   });
 
@@ -718,7 +794,7 @@ export function triggerHyperstarDouble(grid) {
   const cleared = [];
   for (let r = 0; r < SIZE; r++) {
     for (let c = 0; c < SIZE; c++) {
-      if (grid[r][c] != null) cleared.push([r, c]);
+      if (isDestroyable(grid, r, c)) cleared.push([r, c]);
     }
   }
   return cleared;
@@ -736,7 +812,7 @@ export function triggerHyperstarDouble(grid) {
 export function triggerLaserCombo(grid, row, col) {
   const cleared = new Set();
   [...laserRowBlastCells(row, col), ...laserColBlastCells(row, col)].forEach(([r, c]) => {
-    if (inBounds(r, c) && grid[r][c] != null) cleared.add(`${r},${c}`);
+    if (isDestroyable(grid, r, c)) cleared.add(`${r},${c}`);
   });
   return [...cleared].map(key => key.split(',').map(Number));
 }
@@ -758,14 +834,14 @@ export function triggerDischargerLaserCombo(grid, row, col, laserOrientation) {
     [row - 1, row, row + 1].forEach(r => {
       if (r < 0 || r >= SIZE) return;
       laserRowBlastCells(r, col).forEach(([rr, cc]) => {
-        if (inBounds(rr, cc) && grid[rr][cc] != null) cleared.add(`${rr},${cc}`);
+        if (isDestroyable(grid, rr, cc)) cleared.add(`${rr},${cc}`);
       });
     });
   } else {
     [col - 1, col, col + 1].forEach(c => {
       if (c < 0 || c >= SIZE) return;
       laserColBlastCells(row, c).forEach(([rr, cc]) => {
-        if (inBounds(rr, cc) && grid[rr][cc] != null) cleared.add(`${rr},${cc}`);
+        if (isDestroyable(grid, rr, cc)) cleared.add(`${rr},${cc}`);
       });
     });
   }
@@ -785,7 +861,7 @@ export function triggerDischargerLaserCombo(grid, row, col, laserOrientation) {
 export function triggerDischargerDouble(grid, row, col) {
   const cleared = new Set();
   radialBurstCells(row, col).forEach(([r, c]) => {
-    if (inBounds(r, c) && grid[r][c] != null) cleared.add(`${r},${c}`);
+    if (isDestroyable(grid, r, c)) cleared.add(`${r},${c}`);
   });
   return [...cleared].map(key => key.split(',').map(Number));
 }

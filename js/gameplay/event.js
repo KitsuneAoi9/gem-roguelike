@@ -986,7 +986,11 @@ export function declineChallenge() {
 }
 
 export function markChallengeDetonation() {
-  if (activeEventState.type === EVENT_TYPE.CHALLENGE) {
+  if (activeEventState.type !== EVENT_TYPE.CHALLENGE) return;
+  // Only challenges that declare the rule care about detonations
+  // (Silent Vein). Others, like A Test of Endurance, ignore special gems.
+  const def = getActiveChallengeDef();
+  if (def?.failOnDetonation) {
     activeEventState.challengeDetonated = true;
   }
 }
@@ -1076,7 +1080,8 @@ export function checkChallengeLevelClear() {
   const def = CHALLENGE_POOL.find(d => d.id === activeEventState.challengeDefId);
   if (!def) { clearChallengeState(); return null; } // shouldn't happen, safety net
 
-  if (activeEventState.challengeDetonated) {
+  // Belt-and-suspenders: only fail on detonation for challenges that use the rule.
+  if (def.failOnDetonation && activeEventState.challengeDetonated) {
     // Failed at some point during the window — resolve as a loss
     // right now, regardless of how many levels were left to go.
     const name = def.name;

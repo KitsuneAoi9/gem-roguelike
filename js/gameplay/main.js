@@ -75,7 +75,7 @@ import {
   resolveSpecialGems, applySpawns, clearSpecialGems, resetSpecialGems,
   triggerHyperstarSingle, triggerHyperstarLaserCombo, triggerHyperstarDouble, triggerLaserCombo,
   triggerHyperstarDischargerCombo, triggerDischargerLaserCombo, triggerDischargerDouble,
-  triggerHyperstarSelfActivation, convertRandomPlainGemsToSpecial,
+  triggerHyperstarSelfActivation, convertRandomPlainGemsToSpecial, expandChainReaction,
 } from './special_gem.js';
 
 import {
@@ -261,6 +261,10 @@ let pendingLevelUpClearedLevel = 1;
 // NEW — true while the Customer Service section is showing the
 // "select a curse to remove" list instead of its normal two cards.
 let curseRemovalPickerOpen = false;
+
+// The two cells of the swap currently being resolved (post-swap
+// positions). Their specials already activated, so chain reactions skip them.
+let currentSwapKeys = new Set();
 
 /**
  * Sets every bit of static, non-runtime-dependent text.
@@ -1381,7 +1385,9 @@ function maybeTriggerFranticStarSelfActivation() {
   const result = triggerHyperstarSelfActivation(grid);
   if (!result) return false;
 
-  const { clearedCells } = result;
+  // Fire specials caught in the wipe; skip the self-activating Hyperstar itself.
+  const { hyperRow, hyperCol, clearedCells: baseCleared } = result;
+  const clearedCells = expandChainReaction(grid, baseCleared, new Set([`${hyperRow},${hyperCol}`]));
   const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
   const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
 
@@ -1773,12 +1779,23 @@ function finishSwapActivatedCombo(clearedCells, gained, popupText, matchedGroups
  */
 function handleHyperstarSingle(hyperRow, hyperCol, targetGemType) {
   const franticStarActive = isBoonActive('frantic_star');
-  const clearedCells = triggerHyperstarSingle(grid, hyperRow, hyperCol, targetGemType, franticStarActive);
+  // The plain color wipe (target color, plus Frantic Star's extra color).
+  const baseCleared = triggerHyperstarSingle(grid, hyperRow, hyperCol, targetGemType, franticStarActive);
+  // Fire any special gem the wipe caught (e.g. your Laser Ruby).
+  const clearedCells = expandChainReaction(grid, baseCleared, currentSwapKeys);
   const hyperstarOwnGemType = grid[hyperRow][hyperCol];
-  const wipedCells = clearedCells.filter(([r, c]) => !(r === hyperRow && c === hyperCol));
+
+  // Wiped cells still score as one matched group; the chain-reaction
+  // extras score as flat incidental cells.
+  const wipedCells = baseCleared.filter(([r, c]) => !(r === hyperRow && c === hyperCol));
+  const baseKeys = new Set(baseCleared.map(([r, c]) => `${r},${c}`));
+  const extraCells = clearedCells.filter(([r, c]) => !baseKeys.has(`${r},${c}`));
 
   const matchedGroups = [{ gemType: targetGemType, length: wipedCells.length }];
-  const incidentalCells = [{ gemType: hyperstarOwnGemType, row: hyperRow, col: hyperCol }];
+  const incidentalCells = [
+    { gemType: hyperstarOwnGemType, row: hyperRow, col: hyperCol },
+    ...extraCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c })),
+  ];
 
   const gained = calculateCascadeStepScore({ matchedGroups, incidentalCells, comboCount: 1 });
   const label = franticStarActive ? 'Frantic Hyperstar Wipe' : 'Hyperstar Wipe';
@@ -1794,7 +1811,7 @@ function handleHyperstarSingle(hyperRow, hyperCol, targetGemType) {
  * @returns {void}
  */
 function handleHyperstarLaserCombo(hyperRow, hyperCol, laserColorType) {
-  const clearedCells = triggerHyperstarLaserCombo(grid, hyperRow, hyperCol, laserColorType);
+  const clearedCells = expandChainReaction(grid, triggerHyperstarLaserCombo(grid, hyperRow, hyperCol, laserColorType), currentSwapKeys);
   const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
   const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
   finishSwapActivatedCombo(clearedCells, gained, `Hyperstar Laser Combo: ${signed(gained)}`, [], incidentalCells);
@@ -1809,7 +1826,7 @@ function handleHyperstarLaserCombo(hyperRow, hyperCol, laserColorType) {
  * @returns {void}
  */
 function handleHyperstarDischargerCombo(hyperRow, hyperCol, dischargerColorType) {
-  const clearedCells = triggerHyperstarDischargerCombo(grid, hyperRow, hyperCol, dischargerColorType);
+  const clearedCells = expandChainReaction(grid, triggerHyperstarDischargerCombo(grid, hyperRow, hyperCol, dischargerColorType), currentSwapKeys);
   const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
   const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
   finishSwapActivatedCombo(clearedCells, gained, `Hyperstar Discharger Combo: ${signed(gained)}`, [], incidentalCells);
@@ -1836,7 +1853,7 @@ function handleHyperstarDouble() {
  * @returns {void}
  */
 function handleLaserCombo(originRow, originCol) {
-  const clearedCells = triggerLaserCombo(grid, originRow, originCol);
+  const clearedCells = expandChainReaction(grid, triggerLaserCombo(grid, originRow, originCol), currentSwapKeys);
   const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
   const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
   finishSwapActivatedCombo(clearedCells, gained, `Laser Combo: ${signed(gained)}`, [], incidentalCells);
@@ -1851,7 +1868,7 @@ function handleLaserCombo(originRow, originCol) {
  * @returns {void}
  */
 function handleDischargerLaserCombo(dischargerRow, dischargerCol, laserOrientation) {
-  const clearedCells = triggerDischargerLaserCombo(grid, dischargerRow, dischargerCol, laserOrientation);
+  const clearedCells = expandChainReaction(grid, triggerDischargerLaserCombo(grid, dischargerRow, dischargerCol, laserOrientation), currentSwapKeys);
   const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
   const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
   finishSwapActivatedCombo(clearedCells, gained, `Discharger Laser Combo: ${signed(gained)}`, [], incidentalCells);
@@ -1865,7 +1882,7 @@ function handleDischargerLaserCombo(dischargerRow, dischargerCol, laserOrientati
  * @returns {void}
  */
 function handleDischargerDouble(originRow, originCol) {
-  const clearedCells = triggerDischargerDouble(grid, originRow, originCol);
+  const clearedCells = expandChainReaction(grid, triggerDischargerDouble(grid, originRow, originCol), currentSwapKeys);
   const incidentalCells = clearedCells.map(([r, c]) => ({ gemType: grid[r][c], row: r, col: c }));
   const gained = calculateCascadeStepScore({ matchedGroups: [], incidentalCells, comboCount: 1 });
   finishSwapActivatedCombo(clearedCells, gained, `Double Discharger: ${signed(gained)}`, [], incidentalCells);
@@ -1884,6 +1901,8 @@ function attemptSwap(r1, c1, r2, c2) {
   busy = true;
   selected = null;
   pendingGoldenTicketTurn = true;
+  // Remember both swapped cells so combo chain reactions don't re-fire them.
+  currentSwapKeys = new Set([`${r1},${c1}`, `${r2},${c2}`]);
 
   if (hintTimeoutId) {
     clearTimeout(hintTimeoutId);

@@ -14,7 +14,8 @@
 import { SIZE, BLOCKED, OBSIDIAN, GEM_TYPES_TOTAL, rand } from './board.js';
 import {
   laserRowBlastCells, laserColBlastCells, dischargerBlastCells,
-  triggerRandomHyperstarWipe, // CHANGED — now imported, not defined here
+  triggerRandomHyperstarWipe,
+  isDestroyable, // NEW — shared "can this cell be destroyed?" rule (excludes Obsidian)
 } from './special_gem.js';
 import { CONSUMABLE_BELT_SIZE } from '../resources/consumable/consumable.js';
 import { consumableState } from '../resources/consumable/consumable_state.js';
@@ -122,7 +123,8 @@ function expandConsumableBlast(grid, initialCells) {
       : [];
 
     for (const [br, bc] of blast) {
-      if (!inBounds(br, bc) || grid[br][bc] == null) continue;
+      // A chain-reaction blast from a consumable never destroys Obsidian either.
+      if (!isDestroyable(grid, br, bc)) continue;
       const bKey = `${br},${bc}`;
       if (!cleared.has(bKey)) {
         cleared.add(bKey);
@@ -143,7 +145,8 @@ function expandConsumableBlast(grid, initialCells) {
  * @returns {[number, number][]}
  */
 export function triggerPickaxe(grid, row, col) {
-  if (!inBounds(row, col) || grid[row][col] == null) return [];
+  // Nothing to destroy on off-board, blocked, or Obsidian cells.
+  if (!isDestroyable(grid, row, col)) return [];
   return expandConsumableBlast(grid, [[row, col]]);
 }
 
@@ -160,7 +163,8 @@ export function triggerDynamite(grid, row, col) {
   for (let dr = -1; dr <= 1; dr++) {
     for (let dc = -1; dc <= 1; dc++) {
       const r = row + dr, c = col + dc;
-      if (inBounds(r, c) && grid[r][c] != null) initial.push([r, c]);
+      // The 3x3 area simply skips any Obsidian caught inside it.
+      if (isDestroyable(grid, r, c)) initial.push([r, c]);
     }
   }
   return expandConsumableBlast(grid, initial);

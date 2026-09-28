@@ -252,6 +252,7 @@ export const CHALLENGE_POOL = [
     acceptLabel: 'Accept the challenge',
     declineLabel: 'Decline',
     durationLevels: 3,
+    failOnDetonation: true, // only this challenge fails when a special gem fires
     winText: "The vein stays silent through all three levels. As promised, a Legendary boon settles into your hands.",
     failText: "Somewhere along the way, the vein cracked — a special gem went off before the challenge's window ran out. The vein's treasure slips away.",
     rewardRarity: BOON_RARITY.LEGENDARY,

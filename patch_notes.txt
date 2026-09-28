@@ -180,7 +180,7 @@ Patch Note 2026/09/27 v0.2.3.0
 
 1. Reworked Dice. It now shuffles only 3x3 area instead of the whole board.
 
-2. Reworked Ressurrection Cross. The Ressurrection Cross no longer auto-consumes itself silently the instant the board is stuck.
+2. Reworked Resurrection Cross. The Resurrection Cross no longer auto-consumes itself silently the instant the board is stuck.
 
 a. If there is no OTHER board-changing consumable (Pickaxe/Dynamite/Dice) in the belt, a message will be prompted and then the item will be triggered.
 b. If there is at least one board-changing consumable in the belt, a dialog will pop up asking if player wants to use an item or just use the cross.
@@ -225,3 +225,14 @@ Epic no longer appears until level 5 (Only applies to the level-up rewards, and 
 Legendary no longer appears until level 6 (Applies to level-up rewards, shops, and events)
 
 16. Fixed Golden Ticket issue where the program crashes when you use it.
+
+========================================================================================================
+Patch Note 2026/09/29 v0.2.3.1
+
+1. Redesign the shop so that it can display the whole boon card in one row. (This is only for the big screen.)
+
+2. Fixed the issue where special gems could destroy Obsidian.
+
+3. Fixed the issue where the Hyperstar and special gems not triggering each other.
+
+4. Fixed the issue where the A Test of Endurance not rewarding when complete.
