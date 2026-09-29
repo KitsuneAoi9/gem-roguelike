@@ -29,20 +29,20 @@ Phase 1 v0.1.x.x
 -> Build the overall structure for gameplay, objects, constant definition. (Completed)
 
 Phase 2 v0.2.x.x (Currently in progress)
--> Implement boons (75% done)
--> Implement shop (85% done, Remaining task: Implement customer service feature)
--> Implement events (80% done)
--> Implement curse (75% done)
+-> Implement boons (Completed)
+-> Implement shop (Completed)
+-> Implement events (Completed)
+-> Implement curse (Completed)
 -> Implement the first batch of consumable (Completed).
 -> Implement Stats side screen to view the current stat and active curse. (Complete)
--> Implement a new mechanic: Dead Gem (Done)
--> Implement a new dead gem type: Obsidian (Done)
--> Finalize the naming and the description of boons, curse and consumable. (In progress)
+-> Implement a new mechanic: Dead Gem (Completed)
+-> Implement a new dead gem type: Obsidian (Completed)
 -> Implement some quality of life (In tandem with above task)
 -> Test play and fix issues/bugs or balancing. (In tandem with above task)
 
 Phase 3A starting v0.3.0.x
 -> Revise the story board (Event stories, overall stories, concept theme).
+-> Finalize the naming and the description of boons, curse and consumable. (In progress)
 -> Add more consumable items.
 -> Bug Fixing
 -> Clean up the code.
@@ -55,7 +55,7 @@ Phase 3C starting from v0.3.6.x
 -> Add player profiles.
 -> Add Save/Load function.
 -> Implement shape overlap judgement function
--> Improve UI/UI
+-> Improve UI/UX
 
 Phase 4 v0.4.x.x (Still planning)
 -> Implement Meta-progress
@@ -63,6 +63,7 @@ Phase 4 v0.4.x.x (Still planning)
 -> Implement sound
 -> Implement VFX
 
-
 ToDo
-1. Fix encounter dialogue screen to show boon name tooltips
+1. Fix encounter dialogue screen to show boon name tooltips the gem mole.
+2. Add glove consumable item that swap a gem to any board, regardless it is a valid move or not.
+3. Pandora Box + gem, select a gem on the board and turn all selected type of gems into that gem 
