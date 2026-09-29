@@ -242,3 +242,12 @@ Patch Note 2026/09/30 v0.2.3.2
 
 1. Shop now no longer offers Resurrection Cross item if player already has unused Resurrection Cross on their item belt.
 => Currently, player would buy the resurrection cross 100% of the time the moment it shows up in the shop. 
+
+========================================================================================================
+Patch Note 2026/09/30 v0.2.3.3
+
+1. Fixed the issue where shop appeared twice after obtaining the boon.
+
+2. Fixed how Obsidian spawns.
+Obsidian can now only ever spawn on a cell that's part of the match-3 that triggered the roll.
+It can never again silently overwrite an unrelated, pre-existing special gem elsewhere on the board.
