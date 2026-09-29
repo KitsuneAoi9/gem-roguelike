@@ -241,6 +241,7 @@ let pendingContinuation = null;
 let pendingLevelUp = false;
 let hintTimeoutId = null;
 let shopContinuation = null;
+let shopOpenedForLevel = null; // Guards against the shop opening twice for the SAME cleared level.
 let currentShopTier = 1;
 let shopEntryScore = 0;
 let objectiveIntervalId = null;
@@ -789,6 +790,7 @@ function init() {
   goldenTicketTurnsRemaining = 0;
   pendingClearedLevels = []; // NEW — never carry a queued reward into a fresh run
   pendingLevelUpClearedLevel = 1;
+  shopOpenedForLevel = null; // NEW — never carry this guard into a fresh run
   curseRemovalPickerOpen = false; // NEW
 
   scoreEl.textContent = score;
@@ -2148,7 +2150,8 @@ function runLevelUpQueue(onAllDone) {
     }
 
     const clearedLevel = queue.shift();
-    // Each step's continuation is simply "do the next queued level".
+    // Reset the once-per-level shop guard for this new level.
+    shopOpenedForLevel = null;
     showLevelUpDialog(clearedLevel, processNext);
   };
 
@@ -2279,8 +2282,8 @@ function proceedAfterBoonPick(def, onContinue, clearedLevel) {
     def.effect.kind === 'board_shrink' ||
     def.effect.kind === 'board_expand_and_shrink';
 
-  // After the shop: board-shape boons still need their placement
-  // step; everything else moves straight on.
+  // After the shop (or after skipping it): board-shape boons still
+  // need their placement step; everything else moves straight on.
   const afterShop = () => {
     if (isBoardShapeBoon) {
       startTilePlacement(def, onContinue);
@@ -2289,9 +2292,18 @@ function proceedAfterBoonPick(def, onContinue, clearedLevel) {
     }
   };
 
+  // NEW — if the shop already opened for THIS cleared level (a Booner
+  // bonus pick got here first), don't open it again. Still run this
+  // pick's own placement check, then continue.
+  if (shopOpenedForLevel === clearedLevel) {
+    afterShop();
+    return;
+  }
+
   // Shop opens per queued level, so a 4 -> 11 jump visits the shop
   // after level 5's reward AND after level 10's reward.
   if (shouldOpenShop(clearedLevel)) {
+    shopOpenedForLevel = clearedLevel; // mark this level as "shop already handled"
     openShopDialog(afterShop, clearedLevel);
   } else {
     afterShop();

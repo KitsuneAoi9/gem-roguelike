@@ -58,7 +58,6 @@ import { SIZE, BLOCKED, OBSIDIAN, rand, GEM_TYPES_TOTAL } from './board.js';
 import { SPECIAL_GEM_TYPE } from '../resources/special%20gem/special_gem.js';
 import { specialGemState } from '../resources/special%20gem/special_gem_state.js';
 import { boonEffectState } from '../resources/boon/boon_effect_state.js';
-import { pickObsidianTargetCell } from './obsidian.js';
 
 function inBounds(row, col) {
   return row >= 0 && row < SIZE && col >= 0 && col < SIZE;
@@ -433,32 +432,40 @@ function rollShardBonusSpawn(group, swapCells) {
 
 /**
  * Entropy/Luminous/Explosive Shard's INDEPENDENT "also spawn an
- * Obsidian gem" roll for a plain match-3 group. Independent from
- * rollShardBonusSpawn() above — a match-3 can spawn BOTH a bonus
- * special AND an Obsidian gem in the same step, since these are two
- * separate rolls. Documented simplification: unlike the bonus-spawn
- * roll (fixed priority order, only one type actually fires), this
- * roll sums ALL currently-held shard boons' pick counts together into
- * one combined chance, rather than rolling each shard type separately
- * — simpler, and there's only ever at most one Obsidian spawn per
- * cascade step anyway (see the `if (!obsidianSpawn)` guard in
- * resolveSpecialGems() below).
+ * Obsidian gem" roll for a plain match-3 group.
+ *
+ * CORRECTED — Obsidian now lands on one of THIS SAME match-3's own 3
+ * cells, exactly like the bonus special-gem spawn does (see
+ * rollShardBonusSpawn() above), instead of a random cell anywhere
+ * else on the board. If this step already claimed one of this
+ * group's cells for a bonus special (Hyperstar/Laser/Discharger), that
+ * cell is excluded — one cell can't become both a special gem AND
+ * Obsidian.
+ *
+ * Still independent from rollShardBonusSpawn() — a match-3 can spawn
+ * BOTH a bonus special AND an Obsidian in the same step, as long as
+ * they land on two DIFFERENT cells of the same 3-cell group.
  *
  * @param {{gemType: number, cells: [number, number][]}} group
- * @param {number[][]} grid
- * @param {Set<string>} clearedKeys - this step's currently-matched
- *   cells, so an Obsidian never spawns on top of something also being
- *   cleared/scored this same step.
+ * @param {{type: string, row: number, col: number} | null} claimedSpawn -
+ *   the cell rollShardBonusSpawn() (or classifyGroup()) already used
+ *   for this SAME group this step, if any.
  * @returns {[number, number] | null}
  */
-function rollShardObsidianSpawn(group, grid, clearedKeys) {
+function rollShardObsidianSpawn(group, claimedSpawn) {
   if (group.cells.length !== 3) return null;
 
   const picks = boonEffectState.shardPicks;
   const totalChance = 0.10 * (picks.entropy + picks.luminous + picks.explosive);
   if (totalChance <= 0 || Math.random() >= totalChance) return null;
 
-  return pickObsidianTargetCell(grid, clearedKeys);
+  // Exclude whichever cell a bonus special spawn already claimed
+  // this same group, so Obsidian never lands on top of it.
+  const claimedKey = claimedSpawn ? `${claimedSpawn.row},${claimedSpawn.col}` : null;
+  const candidates = group.cells.filter(([r, c]) => `${r},${c}` !== claimedKey);
+  if (candidates.length === 0) return null; // defensive — shouldn't happen with 3 cells
+
+  return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
 /**
@@ -532,19 +539,16 @@ export function resolveSpecialGems(grid, matched, swapCells = null) {
   for (const group of groups) {
     let spawn = classifyGroup(group, swapCells);
 
-    // NEW — Entropy/Luminous/Explosive Shard: give a plain match-3
-    // (classifyGroup() returned null since it's under 4 cells) a
-    // second chance to spawn a special gem anyway.
+    // Entropy/Luminous/Explosive Shard: give a plain match-3 a second
+    // chance to spawn a special gem anyway.
     if (!spawn && group.cells.length === 3) {
       spawn = rollShardBonusSpawn(group, swapCells);
     }
 
-    // NEW — independently, roll this same group for an Obsidian
-    // spawn too. Only the FIRST group in this step to succeed
-    // actually places one (see the guard below) — a single cascade
-    // step never spawns more than one Obsidian gem at once.
+    // CHANGED — Obsidian rolls against THIS group's own 3 cells now,
+    // excluding whatever cell `spawn` just claimed for this group.
     if (!obsidianSpawn) {
-      obsidianSpawn = rollShardObsidianSpawn(group, grid, clearedKeys);
+      obsidianSpawn = rollShardObsidianSpawn(group, spawn);
     }
 
     if (!spawn) continue;
@@ -598,6 +602,15 @@ export function resolveSpecialGems(grid, matched, swapCells = null) {
   }
 
   for (const key of spawnKeys) clearedKeys.delete(key);
+
+  // NEW — the Obsidian spawn cell is one of this step's own matched
+  // cells (not a cell picked from elsewhere on the board anymore), so
+  // it must be excluded from what actually clears — same treatment a
+  // spawn cell already gets — or it would get wiped and refilled
+  // instead of surviving as an Obsidian gem.
+  if (obsidianSpawn) {
+    clearedKeys.delete(`${obsidianSpawn[0]},${obsidianSpawn[1]}`);
+  }
 
   const clearedCells = [...clearedKeys].map(key => key.split(',').map(Number));
 
