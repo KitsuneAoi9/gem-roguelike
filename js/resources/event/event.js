@@ -192,9 +192,9 @@ export const ELITE_POOL = [
     onLose: { kind: 'lose_random_boons', count: 2 },
     decline: { kind: 'fixed_penalty', penalty: { kind: 'lose_random_boons', count: 1 } },
     winText: (grantedNames) =>
-      `You manage to fend off the Gem Hoarder, sending it stumbling back into its pile of treasures. It clutches its collection tightly, glaring at you with envy.\n\n\u201cMy precious...boons!\u201d\n\nWith the Hoarder defeated, you search through its collection and claim ${grantedNames.join(', ')} for yourself.`,
+      `You manage to fend off the Boon Hoarder, sending it stumbling back into its pile of treasures. It clutches its collection tightly, glaring at you with envy.\n\n\u201cMy precious... boons!\u201d\n\nWith the Hoarder defeated, you search through its collection and claim ${grantedNames.join(', ')} for yourself.`,
     loseText: (removedNames) =>
-      `The Gem Hoarder overwhelms you and tears ${removedNames.join(' and ')} from your collection. It holds the prize close, its eyes gleaming with satisfaction.\n\n\u201cMine... two more for my collection.\u201d`,
+      `The Boon Hoarder overwhelms you and tears ${removedNames.join(' and ')} from your collection. It holds the prize close, its eyes gleaming with satisfaction.\n\n\u201cMine... two more for my collection.\u201d`,
     declineText: (removedNames) =>
       `You reluctantly hand over ${removedNames[0] || 'a boon'}. The Hoarder greedily gathers it into its collection, barely able to contain its excitement.\n\n\u201cYes... yes!\u201d\n\nIt steps aside, allowing you to pass.`,
   },
