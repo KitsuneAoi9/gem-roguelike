@@ -52,6 +52,8 @@
 //     Overcharge Essence boon: picks random currently-plain
 //     (non-special, non-BLOCKED, non-Obsidian) cells and converts
 //     each into a Laser Beam or Discharger.
+//   - Obsidian spawn also nulls specialGemState.grid at its cell, so a
+//     matched Laser/Discharger that already fired leaves no orphan overlay.
 // ============================================================
 
 import { SIZE, BLOCKED, OBSIDIAN, rand, GEM_TYPES_TOTAL } from './board.js';
@@ -630,7 +632,10 @@ export function resolveSpecialGems(grid, matched, swapCells = null) {
   // cell" exclusion logic a second time.
   if (obsidianSpawn) {
     const [or, oc] = obsidianSpawn;
+    // Turn this cell into Obsidian in the main grid.
     grid[or][oc] = OBSIDIAN;
+    // FIX — also wipe any special-gem overlay on this same cell.
+    specialGemState.grid[or][oc] = null;
   }
 
   return { clearedCells, spawns, matchedGroups, incidentalCells, obsidianSpawn };
