@@ -11,7 +11,7 @@
 // truth, zero behavior change.
 // ============================================================
 
-import { SIZE, BLOCKED, OBSIDIAN, GEM_TYPES_TOTAL, rand } from './board.js';
+import { SIZE, BLOCKED, OBSIDIAN, GEM_TYPES_TOTAL, rand, swap } from './board.js';
 import {
   laserRowBlastCells, laserColBlastCells, dischargerBlastCells,
   triggerRandomHyperstarWipe,
@@ -203,4 +203,39 @@ export function triggerDiceShuffleArea(grid, row, col) {
     grid[r1][c1] = grid[r2][c2];
     grid[r2][c2] = tmp;
   }
+}
+
+/**
+ * Magical Glove: swaps ANY two usable cells on the board, adjacent or
+ * not. Both the gem colors AND their special-gem overlays move
+ * together, so a Laser stays a Laser at its new position.
+ *
+ * This does NOT run any swap-combo logic (Hyperstar wipe, Laser combo,
+ * etc.). It only repositions. main.js then runs the normal match
+ * pipeline, so any color match the move creates resolves as usual.
+ *
+ * @param {number[][]} grid - mutated in place.
+ * @param {number} row1
+ * @param {number} col1
+ * @param {number} row2
+ * @param {number} col2
+ * @returns {boolean} true if the swap happened, false if it was rejected.
+ */
+export function triggerMagicalGloveSwap(grid, row1, col1, row2, col2) {
+  // Both cells must be inside the allocated grid.
+  if (!inBounds(row1, col1) || !inBounds(row2, col2)) return false;
+
+  // Swapping a cell with itself is meaningless.
+  if (row1 === row2 && col1 === col2) return false;
+
+  // BLOCKED (null) and Obsidian cells can never be either end.
+  const unusable = (r, c) => grid[r][c] === BLOCKED || grid[r][c] === OBSIDIAN;
+  if (unusable(row1, col1) || unusable(row2, col2)) return false;
+
+  // Swap the colors...
+  swap(grid, row1, col1, row2, col2);
+  // ...and the special-gem overlay, so specials travel with their gem.
+  swap(specialGemState.grid, row1, col1, row2, col2);
+
+  return true;
 }

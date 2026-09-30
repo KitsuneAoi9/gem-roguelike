@@ -45,6 +45,15 @@ import {
   calculateBoonPrice, shopTierForLevel, resetBoonShop,
 } from './boon_shop.js';
 
+import {
+  addConsumableToInventory, removeConsumableFromInventory, findFirstConsumableOfType,
+  hasBeltSpace, resetConsumables, triggerPickaxe, triggerDynamite, triggerDiceShuffleArea,
+  triggerMagicalGloveSwap,
+} from './consumable.js';
+import {
+  rollConsumableShopOffer, calculateConsumablePrice, isConsumablePurchasedThisVisit,
+  markConsumablePurchased, resetConsumableShop,
+} from './consumable_shop.js';
 import { resetCurses, getActiveCurseDefsByKind, recordDecayingBirthstoneActivity } from './curse.js';
 import {
   tryTriggerEvent, buildEncounterOffer, resolveEncounterAccept, resolveEncounterDecline,
@@ -122,14 +131,6 @@ import { SPECIAL_GEM_TYPE } from '../resources/special%20gem/special_gem.js';
 import { specialGemState } from '../resources/special%20gem/special_gem_state.js';
 import { progressionState } from '../resources/progression/progression.js';
 
-import {
-  addConsumableToInventory, removeConsumableFromInventory, findFirstConsumableOfType,
-  hasBeltSpace, resetConsumables, triggerPickaxe, triggerDynamite, triggerDiceShuffleArea,
-} from './consumable.js';
-import {
-  rollConsumableShopOffer, calculateConsumablePrice, isConsumablePurchasedThisVisit,
-  markConsumablePurchased, resetConsumableShop,
-} from './consumable_shop.js';
 import { CONSUMABLE_INFO, CONSUMABLE_TYPE, GOLDEN_TICKET_TURNS } from '../resources/consumable/consumable.js';
 import { consumableState } from '../resources/consumable/consumable_state.js';
 
@@ -140,6 +141,7 @@ const BOARD_CHANGING_CONSUMABLE_TYPES = [
   CONSUMABLE_TYPE.PICKAXE,
   CONSUMABLE_TYPE.DYNAMITE,
   CONSUMABLE_TYPE.DICE,
+  CONSUMABLE_TYPE.MAGICAL_GLOVE,
 ];
 
 // NEW — every event dialog's title now reads "[Event type] --- [Event
@@ -189,6 +191,7 @@ const levelUpNextBtn  = document.getElementById('levelup-next');
 const boonDialogEl    = document.getElementById('boon-dialog');
 const boonTitleEl     = document.getElementById('boon-title');
 const boonChoicesEl   = document.getElementById('boon-choices');
+const boonSkipBtn     = document.getElementById('boon-skip');
 const globalMultiplierEl = document.getElementById('global-multiplier');
 const globalBonusEl      = document.getElementById('global-bonus');
 const gemStatsListEl     = document.getElementById('gem-stats-list');
@@ -267,6 +270,10 @@ let curseRemovalPickerOpen = false;
 // positions). Their specials already activated, so chain reactions skip them.
 let currentSwapKeys = new Set();
 
+// NEW — Magical Glove's two-click flow: the first gem the player picked
+// ([row, col]), or null while still waiting for that first click.
+let gloveSource = null;
+
 /**
  * Sets every bit of static, non-runtime-dependent text.
  *
@@ -284,6 +291,7 @@ function applyStaticText() {
   shopTitleEl.textContent = DIALOG_TITLES.SHOP;
   shopLeaveBtn.textContent = BUTTONS.LEAVE_SHOP;
   versionTagEl.textContent = GAME_VERSION;
+  boonSkipBtn.textContent = BUTTONS.SKIP_BOON;
 }
 
 /**
@@ -366,12 +374,136 @@ function renderCursePanel() {
   });
 }
 
+// ============================================================
+// HISTORY: floating tooltip + boon-pick text helpers
+// ============================================================
+
+// Boon effect kinds whose appliedEffect.penalizedGems holds RANDOMLY
+// chosen gems. Opulence is deliberately absent: it also stores a
+// penalizedGems list, but that is "every other gem", not a random pick.
+const RANDOM_GEM_TARGET_KINDS = new Set([
+  'frenzy',
+  'gem_score_brilliance',
+  'gem_multiplier_addict',
+  'gem_forbidden_swap',
+]);
+
+/**
+ * Gem id -> display name (e.g. 'ruby' -> 'Ruby'). Falls back to the
+ * raw id so a missing catalog entry never breaks the History line.
+ *
+ * @param {string} gemId
+ * @returns {string}
+ */
+function gemDisplayName(gemId) {
+  return ALL_GEM_CATALOG.find(g => g.id === gemId)?.name ?? gemId;
+}
+
+/**
+ * Joins names into natural English: "A", "A and B", "A, B and C".
+ *
+ * @param {string[]} names
+ * @returns {string}
+ */
+function joinNamesNatural(names) {
+  if (names.length <= 1) return names.join('');
+  // Everything except the last name is comma-separated, then " and " + last.
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/**
+ * Builds the "Random gem targeted: ..." part of a boon History line.
+ * Returns '' when the boon doesn't roll random gems, so the caller
+ * can append it unconditionally.
+ *
+ * @param {object|null} appliedEffect - the record applyBoonEffect() returned.
+ * @returns {string} an HTML fragment (starts with <br>) or ''.
+ */
+function buildRandomGemTargetLine(appliedEffect) {
+  // Only boons that actually roll random gems get this extra line.
+  if (!appliedEffect || !RANDOM_GEM_TARGET_KINDS.has(appliedEffect.kind)) return '';
+
+  // The exact gems recorded at pick time (the same list reversal uses).
+  const gems = appliedEffect.penalizedGems;
+  if (!gems || gems.length === 0) return '';
+
+  const names = gems.map(gemDisplayName);
+  return `<br>Random gem targeted: ${joinNamesNatural(names)}`;
+}
+
+// --- One shared tooltip element, appended to <body> so no scrolling
+// ancestor (the History panel) can clip it. ---
+const floatingTooltipEl = document.createElement('div');
+floatingTooltipEl.className = 'floating-tooltip hidden';
+document.body.appendChild(floatingTooltipEl);
+
+/** Hides the floating tooltip. Safe to call at any time. */
+function hideFloatingTooltip() {
+  floatingTooltipEl.classList.add('hidden');
+}
+
+/**
+ * Shows the floating tooltip next to a hovered name span, using the
+ * span's own data-tooltip text (built by formatNamedEffectSpan()).
+ *
+ * @param {HTMLElement} target - the .event-inline-name span.
+ * @returns {void}
+ */
+function showFloatingTooltip(target) {
+  // textContent (not innerHTML): the tooltip is plain text.
+  floatingTooltipEl.textContent = target.dataset.tooltip || '';
+
+  // Park it at 0,0 BEFORE measuring. A stale position near the right
+  // edge would shrink its available width and distort the measurement.
+  floatingTooltipEl.style.left = '0px';
+  floatingTooltipEl.style.top = '0px';
+  floatingTooltipEl.classList.remove('hidden');
+
+  const anchor = target.getBoundingClientRect();
+  const tip = floatingTooltipEl.getBoundingClientRect();
+  const margin = 8; // minimum gap kept from the viewport edges
+
+  // Horizontal: start at the name's left edge, then clamp so the tooltip
+  // never runs off either side (the History panel hugs the right edge).
+  let left = anchor.left;
+  left = Math.min(left, window.innerWidth - tip.width - margin);
+  left = Math.max(left, margin);
+
+  // Vertical: prefer below the name; flip above if it would fall off the bottom.
+  let top = anchor.bottom + 6;
+  if (top + tip.height > window.innerHeight - margin) {
+    top = anchor.top - tip.height - 6;
+  }
+  top = Math.max(top, margin);
+
+  floatingTooltipEl.style.left = `${left}px`;
+  floatingTooltipEl.style.top = `${top}px`;
+}
+
+// Event delegation: History rows are rebuilt on every entry, so listen
+// once on the container instead of on each span.
+historyListEl.addEventListener('mouseover', (e) => {
+  const nameSpan = e.target.closest('.event-inline-name');
+  if (nameSpan) showFloatingTooltip(nameSpan);
+});
+historyListEl.addEventListener('mouseout', (e) => {
+  if (e.target.closest('.event-inline-name')) hideFloatingTooltip();
+});
+
+// Scrolling moves the name out from under a fixed tooltip, so hide it.
+// The scroll container is the panel itself, not the inner list.
+document.getElementById('history-panel').addEventListener('scroll', hideFloatingTooltip);
+
 /**
  * Rebuilds the right-side History panel from historyState.entries.
  *
  * @returns {void}
  */
 function renderHistoryPanel() {
+  // The rebuild below destroys the hovered span, and a destroyed element
+  // never fires mouseout, so the tooltip would stay stuck on screen.
+  hideFloatingTooltip();
+
   historyListEl.innerHTML = '';
   historyState.entries.slice().reverse().forEach(entry => {
     const row = document.createElement('div');
@@ -380,7 +512,6 @@ function renderHistoryPanel() {
     historyListEl.appendChild(row);
   });
 }
-
 /**
  * Rebuilds the 3-slot consumable belt from consumableState.inventory.
  *
@@ -459,7 +590,12 @@ function onBeltSlotClick(entry) {
 
   if (info.requiresTarget) {
     pendingConsumableEntry = entry;
-    messageEl.textContent = `select a gem to use your ${info.name} on`;
+    gloveSource = null; // make sure a Glove always starts at step 1
+
+    // The Glove needs two clicks, so its prompt reads differently.
+    messageEl.textContent = entry.type === CONSUMABLE_TYPE.MAGICAL_GLOVE
+      ? 'select the gem you want to move'
+      : `select a gem to use your ${info.name} on`;
     return;
   }
 
@@ -491,6 +627,13 @@ function handleConsumableTargetClick(row, col) {
   if (grid[row][col] === BLOCKED) return;
   // Obsidian can't be targeted (nothing meaningful to destroy there).
   if (grid[row][col] === OBSIDIAN) return;
+
+  // NEW — the Glove has its own two-click flow, so hand it off before the
+  // shared code below (which assumes ONE click consumes the item).
+  if (pendingConsumableEntry.type === CONSUMABLE_TYPE.MAGICAL_GLOVE) {
+    handleGloveClick(row, col);
+    return;
+  }
 
   const entry = pendingConsumableEntry;
   pendingConsumableEntry = null;
@@ -563,6 +706,73 @@ function handleConsumableTargetClick(row, col) {
 
   markMatchedGems(boardEl, toBooleanGrid(clearedCells));
   continueCascadeAfterMatch(clearedCells);
+}
+
+/**
+ * NEW — Magical Glove's two-click flow.
+ *   Click 1: pick the gem to move (highlighted as "selected").
+ *   Click 2: pick ANY other usable cell; the two exchange places.
+ * Clicking the first gem again cancels the pick (the Glove stays armed).
+ * After the swap, the normal match pipeline runs, exactly like Dice.
+ *
+ * @param {number} row
+ * @param {number} col
+ * @returns {void}
+ */
+function handleGloveClick(row, col) {
+  const entry = pendingConsumableEntry;
+
+  // --- Step 1: remember the first gem and highlight it ---
+  if (!gloveSource) {
+    gloveSource = [row, col];
+    updateSelectedVisual(boardEl, gloveSource);
+    messageEl.textContent = 'select any other gem to swap it with';
+    return;
+  }
+
+  const [sr, sc] = gloveSource;
+
+  // --- Clicking the same gem again = undo the first pick ---
+  if (sr === row && sc === col) {
+    gloveSource = null;
+    updateSelectedVisual(boardEl, null);
+    messageEl.textContent = 'select the gem you want to move';
+    return;
+  }
+
+  // --- Step 2: perform the swap (grid colors + special overlays) ---
+  const swapped = triggerMagicalGloveSwap(grid, sr, sc, row, col);
+  if (!swapped) {
+    // Shouldn't happen (both clicks were already validated above),
+    // but if it does, reset cleanly instead of leaving the Glove stuck.
+    gloveSource = null;
+    updateSelectedVisual(boardEl, null);
+    messageEl.textContent = 'select the gem you want to move';
+    return;
+  }
+
+  // The Glove is used up as soon as the swap succeeds, whether or not
+  // it creates a match.
+  pendingConsumableEntry = null;
+  gloveSource = null;
+  busy = true; // block input while the cascade resolves
+  messageEl.textContent = '';
+
+  removeConsumableFromInventory(entry.pickId);
+  renderConsumableBelt();
+  renderBoardWithInteractions();
+
+  addHistoryEntry('event', 'Magical Glove swaps two gems.', 'event');
+  renderHistoryPanel();
+
+  // Run the normal pipeline. Passing the two swapped cells lets a
+  // spawned special gem prefer one of them, same as a real player swap.
+  // comboCount starts at 0; resolveMatches() bumps it to 1 on a match.
+  // pendingGoldenTicketTurn is deliberately NOT set, so the Glove never
+  // uses up a Golden Ticket turn. If nothing matches, resolveMatches()
+  // just settles, frees `busy`, and runs checkEndState().
+  comboCount = 0;
+  resolveMatches([[sr, sc], [row, col]]);
 }
 
 /**
@@ -786,6 +996,7 @@ function init() {
   pendingLevelUp = false;
   pendingEventResult = null;
   pendingConsumableEntry = null;
+  gloveSource = null; // never carry a half-finished Glove swap into a fresh run
   pendingGoldenTicketTurn = false;
   goldenTicketTurnsRemaining = 0;
   pendingClearedLevels = []; // NEW — never carry a queued reward into a fresh run
@@ -2174,6 +2385,17 @@ function showLevelUpDialog(clearedLevel, onContinue) {
   levelUpDialogEl.classList.remove('hidden');
 }
 
+
+// ============================================================
+// DISABLED — Booner's old "second boon dialog" behavior.
+// Replaced by the 4th-card design inside showBoonDialog().
+// To restore: uncomment this function AND bring back the
+// `isBonusOffer` parameter + the maybeGrantBoonerBonusOffer()
+// call in showBoonDialog()'s card click handler, and remove the
+// 4th-card roll at the top of showBoonDialog() so Booner doesn't
+// apply twice. Also revert Booner's description in boon.js.
+// ============================================================
+
 /**
  * Booner's stacking chance of an extra boon offer (unchanged logic).
  * CHANGED — takes `clearedLevel` so the bonus offer is gated by the
@@ -2183,7 +2405,7 @@ function showLevelUpDialog(clearedLevel, onContinue) {
  * @param {number} clearedLevel
  * @returns {void}
  */
-function maybeGrantBoonerBonusOffer(onDone, clearedLevel) {
+/*nction maybeGrantBoonerBonusOffer(onDone, clearedLevel) {
   const boonerCount = countActiveBoon('booner');
   if (boonerCount === 0 || Math.random() >= 0.25 * boonerCount) {
     onDone();
@@ -2193,28 +2415,44 @@ function maybeGrantBoonerBonusOffer(onDone, clearedLevel) {
   addHistoryEntry('event', 'Booner grants a bonus boon offer!', 'event');
   renderHistoryPanel();
   showBoonDialog(onDone, clearedLevel, true); // isBonusOffer=true — never re-rolls Booner itself
-}
+}*/
 
 /**
- * Builds and shows the pick-one-of-three boon dialog.
+ * Builds and shows the pick-one boon dialog for one cleared level.
  *
- * CHANGED THIS ROUND — new `clearedLevel` parameter (2nd), used for
- * the offer's rarity gates and passed on to the shop step.
+ * CHANGED — Booner no longer opens a second dialog. Its chance is
+ * rolled ONCE here, and a successful roll simply makes this same
+ * dialog offer 4 cards instead of 3. Chance is 25% per copy held.
+ * There is now also a Skip button that takes no boon.
  *
- * @param {() => void} onContinue
+ * @param {() => void} onContinue - next queued level (or event roll).
  * @param {number} clearedLevel - the level this reward is FOR.
- * @param {boolean} [isBonusOffer=false]
  * @returns {void}
  */
-function showBoonDialog(onContinue, clearedLevel, isBonusOffer = false) {
+function showBoonDialog(onContinue, clearedLevel) {
+  // Roll Booner's bonus card once, up front. With no Booner held,
+  // boonerCount is 0 and the roll is skipped entirely.
+  const boonerCount = countActiveBoon('booner');
+  const boonerTriggered = boonerCount > 0 && Math.random() < 0.25 * boonerCount;
+  const offerSize = boonerTriggered ? 4 : 3;
+
   // Offer is generated against the level being rewarded, NOT the
   // (possibly much higher) current level.
-  const offer = generateBoonOffer(3, clearedLevel);
+  const offer = generateBoonOffer(offerSize, clearedLevel);
 
   if (offer.length === 0) {
     onContinue();
     return;
   }
+
+  if (boonerTriggered) {
+    addHistoryEntry('event', 'Booner adds a 4th option to the reward!', 'event');
+    renderHistoryPanel();
+  }
+
+  // 4 cards need a wider dialog box than 3 do.
+  boonDialogEl.querySelector('.boon-dialog-box')
+    .classList.toggle('boon-dialog-box--wide', offer.length > 3);
 
   boonChoicesEl.innerHTML = '';
   offer.forEach(def => {
@@ -2236,27 +2474,45 @@ function showBoonDialog(onContinue, clearedLevel, isBonusOffer = false) {
         <span class="boon-card-rarity">${def.rarity}</span>
       </div>
     `;
+
     card.addEventListener('click', () => {
       const activeBoon = pickBoon(def.id);
       activeBoon.appliedEffect = applyBoonEffect(def);
       renderSideStats();
       boonDialogEl.classList.add('hidden');
 
-      addHistoryEntry('boon', `Boon picked: ${def.name} — ${def.description}`, 'boon');
+      // The name is a hover-tooltip span (description lives in the tooltip).
+      // For boons that roll random gems, a second line names the chosen
+      // gems. Both parts share ONE entry so the panel's newest-first
+      // ordering can't flip them apart.
+      addHistoryEntry(
+        'boon',
+        `Boon picked: ${formatNamedEffectSpan(def)}${buildRandomGemTargetLine(activeBoon.appliedEffect)}`,
+        'boon'
+      );
       renderHistoryPanel();
 
-      // What happens after THIS pick: shop (if due) then placement.
-      const finishThisPick = () => proceedAfterBoonPick(def, onContinue, clearedLevel);
-      if (isBonusOffer) {
-        finishThisPick();
-      } else {
-        // Booner may add one bonus offer for this same level first.
-        maybeGrantBoonerBonusOffer(finishThisPick, clearedLevel);
-      }
+      // Shop (if due) and board placement (if needed) come next.
+      proceedAfterBoonPick(def, onContinue, clearedLevel);
     });
 
     boonChoicesEl.appendChild(card);
   });
+
+  // Skip button. Assigned with .onclick (not addEventListener) so each
+  // time this dialog opens it REPLACES the previous handler instead of
+  // stacking one more on top.
+  boonSkipBtn.onclick = () => {
+    boonDialogEl.classList.add('hidden');
+
+    addHistoryEntry('boon', 'Boon reward skipped.', 'neutral');
+    renderHistoryPanel();
+
+    // No boon was picked, so pass null. The shop still opens if this
+    // cleared level is a shop level, since that depends on the level,
+    // not on the pick.
+    proceedAfterBoonPick(null, onContinue, clearedLevel);
+  };
 
   boonDialogEl.classList.remove('hidden');
 }
@@ -2588,7 +2844,13 @@ function buyBoonFromShop(def, price) {
   activeBoon.appliedEffect = applyBoonEffect(def);
   markBoonPurchased(def.id);
 
-  addHistoryEntry('boon', `Bought from shop: ${def.name} (-${price}) — ${def.description}`, 'boon');
+  // Same format as a free pick: name span with tooltip, price after it,
+  // then the random-gem line (if this boon rolls random gems).
+  addHistoryEntry(
+    'boon',
+    `Bought from shop: ${formatNamedEffectSpan(def)} (-${price})${buildRandomGemTargetLine(activeBoon.appliedEffect)}`,
+    'boon'
+  );
   renderHistoryPanel();
 
   renderSideStats();

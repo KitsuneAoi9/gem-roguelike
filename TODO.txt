@@ -62,6 +62,7 @@ Phase 4 v0.4.x.x (Still planning)
 -> Implement animations
 -> Implement sound
 -> Implement VFX
+-> Implement new Event type: Boss
 
 ToDo
 1. Fix encounter dialogue screen to show boon name tooltips the gem mole.

@@ -10,6 +10,7 @@ export const CONSUMABLE_TYPE = {
   DICE: 'dice',
   GOLDEN_TICKET: 'golden_ticket',
   RESURRECTION_CROSS: 'resurrection_cross',
+  MAGICAL_GLOVE: 'magical_glove',
 };
 
 // `pricePercent` is a PERCENT of the score the player had when they
@@ -62,6 +63,13 @@ export const CONSUMABLE_INFO = {
     pricePercent: 0.60,
     requiresTarget: false,
     passive: true,
+  },
+  [CONSUMABLE_TYPE.MAGICAL_GLOVE]: {
+    name: 'Magical Glove',
+    file: 'magical_glove.svg',
+    description: 'Swap one gem with any other gem anywhere on the board. Special gems move with their gem but do not trigger a combo. Any match the swap creates resolves normally. Obsidian cannot be swapped.',
+    pricePercent: 0.40,
+    requiresTarget: true, // armed by a belt click, then needs board clicks (two of them, see main.js)
   },
 };
 

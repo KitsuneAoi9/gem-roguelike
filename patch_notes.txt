@@ -251,3 +251,17 @@ Patch Note 2026/09/30 v0.2.3.3
 2. Fixed how Obsidian spawns.
 Obsidian can now only ever spawn on a cell that's part of the match-3 that triggered the roll.
 It can never again silently overwrite an unrelated, pre-existing special gem elsewhere on the board.
+
+========================================================================================================
+Patch Note 2026/09/30 v0.3.0.0
+
+1. Fixed the issue where the gem mole trade dialogue doesn't have tooltips for the taken and received boons.
+
+2. Added a new consumable item: Magical Glove which allows player to swap one gem to anywhere on the board for free.
+
+3. Added skip button for the level up rewards so that player can select their own build.
+
+4. Reworked history chat: 
+a. When a boon is picked or bought, tt will now only show the boon name.
+b. If the obtained boon states random gem in its effect, the randomized gem type will now be shown in the history chat.
+c. Hovering the boon name now will display the tooltips for you to see the effect.
