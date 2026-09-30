@@ -677,3 +677,11 @@
     flex-wrap: nowrap; /* keep every boon card on ONE row */
   }
 }
+
+/* Shop consumable squares now use the JS floating tooltip (main.js),
+   because .shop-dialog-box's overflow-y: auto clips the CSS ::after
+   box. This override comes later in the file with the same specificity
+   as the original rule, so it wins. */
+.consumable-shop-square[data-tooltip]:hover::after {
+  content: none;
+}

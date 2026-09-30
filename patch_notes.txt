@@ -265,3 +265,8 @@ Patch Note 2026/09/30 v0.3.0.0
 a. When a boon is picked or bought, tt will now only show the boon name.
 b. If the obtained boon states random gem in its effect, the randomized gem type will now be shown in the history chat.
 c. Hovering the boon name now will display the tooltips for you to see the effect.
+
+========================================================================================================
+Patch Note 2026/09/30 v0.3.0.1
+
+1. Fix the display issue when hovering over the consumable items in the shop.
