@@ -309,7 +309,7 @@ const shopOnlyBoons = [
   {
     id: 'booner',
     name: 'Booner',
-    description: 'Increases the chance of getting another boon offer in the level reward by 25%.',
+    description: 'Adds a 4th option to the level-up reward, with a 25% chance per copy.',
     type: BOON_TYPE.BUFF,
     rarity: BOON_RARITY.RARE,
     maxOccurrences: 3,

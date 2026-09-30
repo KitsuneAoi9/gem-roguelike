@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Placeholder art: a light glove with a gold cuff and a sparkle,
+       matching the game's dark/gold palette. Safe to replace later. -->
+
+  <!-- Four fingers (drawn first so the palm can cover their base seams) -->
+  <rect x="20"   y="14" width="5" height="22" rx="2.5" fill="#ece4d8" stroke="#e0b34a" stroke-width="2"/>
+  <rect x="26.5" y="9"  width="5" height="27" rx="2.5" fill="#ece4d8" stroke="#e0b34a" stroke-width="2"/>
+  <rect x="33"   y="11" width="5" height="25" rx="2.5" fill="#ece4d8" stroke="#e0b34a" stroke-width="2"/>
+  <rect x="39.5" y="17" width="5" height="19" rx="2.5" fill="#ece4d8" stroke="#e0b34a" stroke-width="2"/>
+
+  <!-- Thumb, angled out to the left -->
+  <ellipse cx="17" cy="38" rx="4.5" ry="9" transform="rotate(-35 17 38)" fill="#ece4d8" stroke="#e0b34a" stroke-width="2"/>
+
+  <!-- Palm -->
+  <rect x="20" y="30" width="25" height="21" rx="5" fill="#ece4d8" stroke="#e0b34a" stroke-width="2"/>
+  <!-- Covers the seam lines where the fingers meet the palm -->
+  <rect x="21.5" y="31" width="22" height="7" fill="#ece4d8"/>
+
+  <!-- Cuff -->
+  <rect x="19" y="50" width="27" height="9" rx="2" fill="#e0b34a" stroke="#3a3138" stroke-width="1.5"/>
+
+  <!-- Sparkle (the "magical" part) -->
+  <path d="M52 10 L54 16 L60 18 L54 20 L52 26 L50 20 L44 18 L50 16 Z" fill="#e0b34a"/>
+</svg>

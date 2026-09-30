@@ -734,3 +734,37 @@ button#reset:hover {
   text-align: center;
   letter-spacing: 0.02em;
 }
+
+/* ============================================================
+   FLOATING TOOLTIP (History panel)
+   The History panel scrolls (overflow-y: auto), which clips any
+   absolutely-positioned ::after tooltip. So inside that panel the
+   CSS tooltip is turned off, and main.js drives this single
+   position: fixed element instead. Fixed elements are not clipped
+   by scrolling ancestors. It is created in JS (no HTML change).
+   ============================================================ */
+
+/* Disable the clipped pseudo-element tooltip inside the History panel only.
+   Three classes deep so it beats .event-inline-name:hover::after. */
+.history-panel .event-inline-name:hover::after {
+  content: none;
+}
+
+.floating-tooltip {
+  position: fixed;
+  z-index: 50;            /* above dialogs (z-index 10) and the version tag */
+  width: max-content;     /* shrink to text, up to max-width below */
+  max-width: 220px;
+  background: var(--rock-deep);
+  border: 1px solid var(--vein);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--paper);
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 10px 24px -10px rgba(0, 0, 0, 0.7);
+  pointer-events: none;   /* never steals the hover, so it can't flicker */
+}

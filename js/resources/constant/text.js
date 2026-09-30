@@ -17,6 +17,7 @@ export const BUTTONS = {
   RESET: "start over",
   NEXT_LEVEL: "Next Level",
   LEAVE_SHOP: "Leave", // NEW
+  SKIP_BOON: "Skip reward",
 };
 
 // --- dialog titles ---
@@ -48,4 +49,4 @@ export const MESSAGES = {
 };
 
 // Version
-export const GAME_VERSION = "v0.2.3.3";
+export const GAME_VERSION = "v0.3.0.0";

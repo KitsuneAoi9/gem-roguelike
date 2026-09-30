@@ -155,6 +155,12 @@
         <div class="dialog-box boon-dialog-box">
           <h2 id="boon-title">Choose a Boon</h2>
           <div id="boon-choices" class="boon-choices"></div>
+          <!-- NEW — Skip button, deliberately separated from the cards by
+               extra margin (see .boon-skip-area in dialog.css) so it
+               can't be clicked by accident. -->
+          <div class="boon-skip-area">
+            <button id="boon-skip" class="boon-skip-btn">Skip reward</button>
+          </div>
         </div>
       </div>
       <div id="shop-dialog" class="dialog-overlay hidden">
