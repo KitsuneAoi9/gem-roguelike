@@ -480,20 +480,6 @@ function showFloatingTooltip(target) {
   floatingTooltipEl.style.top = `${top}px`;
 }
 
-// Event delegation: History rows are rebuilt on every entry, so listen
-// once on the container instead of on each span.
-historyListEl.addEventListener('mouseover', (e) => {
-  const nameSpan = e.target.closest('.event-inline-name');
-  if (nameSpan) showFloatingTooltip(nameSpan);
-});
-historyListEl.addEventListener('mouseout', (e) => {
-  if (e.target.closest('.event-inline-name')) hideFloatingTooltip();
-});
-
-// Scrolling moves the name out from under a fixed tooltip, so hide it.
-// The scroll container is the panel itself, not the inner list.
-document.getElementById('history-panel').addEventListener('scroll', hideFloatingTooltip);
-
 /**
  * Rebuilds the right-side History panel from historyState.entries.
  *
@@ -2606,6 +2592,10 @@ function openShopDialog(onContinue, clearedLevel) {
  * @returns {void}
  */
 function renderShopDialog() {
+  // The squares are rebuilt below, and a destroyed element never fires
+  // mouseout, so clear any tooltip left on screen from a hovered square.
+  hideFloatingTooltip();
+
   shopSubtitleEl.textContent = `Your score: ${score}`;
   shopChoicesEl.innerHTML = '';
 
@@ -3009,6 +2999,7 @@ levelUpNextBtn.addEventListener('click', () => {
   showBoonDialog(pendingContinuation, pendingLevelUpClearedLevel);
 });
 shopLeaveBtn.addEventListener('click', () => {
+  hideFloatingTooltip(); // don't leave a tooltip behind when the dialog closes
   shopDialogEl.classList.add('hidden');
   const finish = shopContinuation;
   shopContinuation = null;
@@ -3040,6 +3031,38 @@ deadlockNoBtn.addEventListener('click', () => {
     `Your ${formatConsumableNameSpan(CONSUMABLE_TYPE.RESURRECTION_CROSS)} saves the run — reshuffling...`
   );
 });
+
+// Event delegation: History rows are rebuilt on every entry, so listen
+// once on the container instead of on each span.
+historyListEl.addEventListener('mouseover', (e) => {
+  const nameSpan = e.target.closest('.event-inline-name');
+  if (nameSpan) showFloatingTooltip(nameSpan);
+});
+historyListEl.addEventListener('mouseout', (e) => {
+  if (e.target.closest('.event-inline-name')) hideFloatingTooltip();
+});
+
+// Scrolling moves the name out from under a fixed tooltip, so hide it.
+// The scroll container is the panel itself, not the inner list.
+document.getElementById('history-panel').addEventListener('scroll', hideFloatingTooltip);
+
+// --- Shop consumable squares: same floating tooltip as History. ---
+// The shop dialog scrolls (overflow-y: auto), which clips the CSS
+// tooltip, so hover is handled here instead. Delegation on the
+// container works because renderShopDialog() rebuilds the squares
+// every render.
+consumableShopChoicesEl.addEventListener('mouseover', (e) => {
+  // closest() so hovering the inner icon div also counts as hovering the square.
+  const square = e.target.closest('.consumable-shop-square');
+  if (square) showFloatingTooltip(square); // reads the square's data-tooltip
+});
+consumableShopChoicesEl.addEventListener('mouseout', (e) => {
+  if (e.target.closest('.consumable-shop-square')) hideFloatingTooltip();
+});
+
+// Scrolling the shop moves the square out from under a fixed tooltip,
+// so hide it. The scroll container is the dialog box itself.
+shopDialogEl.querySelector('.shop-dialog-box').addEventListener('scroll', hideFloatingTooltip);
 
 applyStaticText();
 applyMovesLimitVisibility();

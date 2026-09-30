@@ -37,13 +37,13 @@ Phase 2 v0.2.x.x (Currently in progress)
 -> Implement Stats side screen to view the current stat and active curse. (Complete)
 -> Implement a new mechanic: Dead Gem (Completed)
 -> Implement a new dead gem type: Obsidian (Completed)
--> Implement some quality of life (In tandem with above task)
--> Test play and fix issues/bugs or balancing. (In tandem with above task)
+-> Implement some quality of life (Completed)
+-> Test play and fix issues/bugs or balancing. (Completed)
 
 Phase 3A starting v0.3.0.x
 -> Revise the story board (Event stories, overall stories, concept theme).
 -> Finalize the naming and the description of boons, curse and consumable. (In progress)
--> Add more consumable items.
+-> Add more consumable items. (Completed)
 -> Bug Fixing
 -> Clean up the code.
 
